@@ -32,12 +32,40 @@ import type {
   SuggestionItem,
 } from './types.js'
 import type { Inspection } from './inspect.js'
+import { languageChain } from './inspect.js'
 import { rank, type Ranked } from './rank.js'
 import { clamp, lineAt, lineStarts, scopeAt, tokenBefore, tokensOnLine, wordInfoAt } from './text.js'
 import { isResolvedGrammar, resolveGrammar, type ResolvedGrammar } from './scan.js'
 
 /** The most rows a completion will carry, so a huge catalogue cannot stall a list. */
 const DEFAULT_LIMIT = 100
+
+/**
+ * One language that may answer a completion, and what its own analysis said.
+ *
+ * In a composite document several languages are in play at one caret, and each source must
+ * be asked with ITS grammar's state and word characters — a JSON source reading the outer
+ * Markdown analysis would be reading the wrong document. So a source is never separated
+ * from the language it was declared in.
+ */
+interface AnsweringLanguage {
+  resolved: ResolvedGrammar<any>
+  state: unknown
+  /** Built once per language, however many sources it declares. */
+  context: CompletionContext<any>
+}
+
+/**
+ * One declared source, with the language that owns it.
+ *
+ * `context` and `range` come from that language, which is what makes a `when`, an `items`,
+ * and a `range` written by the embedded grammar's author mean what they say: they see the
+ * embedded `state`, the embedded word characters, and the shared token list.
+ */
+interface Candidate {
+  source: CompletionSource<any>
+  language: AnsweringLanguage
+}
 
 /** What the editor knows when it asks for a list. */
 export interface CompletionRequest {
@@ -71,38 +99,69 @@ export function complete<State>(
   request: CompletionRequest,
 ): Completion | undefined {
   const resolved = isResolvedGrammar(grammar) ? grammar : resolveGrammar(grammar)
-  const sources = resolved.grammar.compose
-  if (sources === undefined || sources.length === 0) return undefined
-
   const text = request.text
   const caret = clamp(request.caret, 0, text.length)
-  const context = completionContext(inspection, resolved, caret, request.trigger)
 
-  const eligible = sources.filter((source) => source.when === undefined || source.when(context))
+  // ── the languages that own this caret ────────────────────────────────────
+  // A composite document answers a completion with several languages at once: the one the
+  // caret is in, every language that encloses it, and the document's own. They are tried
+  // innermost first, so a tie in `priority` is won by the language the reader is actually
+  // typing in — an embedded JSON list beats a Markdown block list at the same caret — while
+  // an outer source that names a higher priority still takes the list, which is how a
+  // document-wide source stays in charge. `Array.sort` is stable, so the order below is the
+  // tie-breaker and no arithmetic is needed to express it.
+  const languages: AnsweringLanguage[] = []
+  for (const span of [...languageChain(inspection, caret)].reverse()) {
+    languages.push({
+      resolved: span.grammar,
+      state: span.state,
+      context: completionContext(inspection, span.grammar, span.state, caret, request.trigger),
+    })
+  }
+  languages.push({
+    resolved: resolved as ResolvedGrammar<any>,
+    state: inspection.state,
+    context: completionContext(inspection, resolved, inspection.state, caret, request.trigger),
+  })
+
+  const candidates: Candidate[] = []
+  for (const language of languages) {
+    for (const source of language.resolved.grammar.compose ?? []) {
+      candidates.push({ source, language })
+    }
+  }
+  if (candidates.length === 0) return undefined
+
+  const eligible = candidates.filter(
+    (candidate) =>
+      candidate.source.when === undefined || candidate.source.when(candidate.language.context),
+  )
   if (eligible.length === 0) return undefined
 
   // ── which source, and over what range ────────────────────────────────────
-  // Ordered by priority, and the range comes from the winner because two sources
-  // disagreeing about the range have no coherent shared answer.
-  // ── which source ────────────────────────────────────────────────────────
   // Priority decides which source OPENS the list; after that the source that answered
   // keeps answering while it remains eligible, so the rows do not change identity under
   // the reader's hands. The range is not part of this: it is computed fresh below, from
   // the caret as it is now.
-  const ordered = [...eligible].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
+  const ordered = [...eligible].sort(
+    (left, right) => (right.source.priority ?? 0) - (left.source.priority ?? 0),
+  )
   const reopening =
     request.previousSourceId === undefined
       ? undefined
-      : ordered.find((source) => source.id === request.previousSourceId)
+      : ordered.find((candidate) => candidate.source.id === request.previousSourceId)
   const winner = reopening ?? ordered[0]
   if (winner === undefined) return undefined
-  const range = resolveRange(winner, context)
+  // Two sources disagreeing about the range have no coherent shared answer, so the range is
+  // the winner's — computed with the winner's own language, whose word characters are what
+  // grow the range while the reader types.
+  const range = resolveRange(winner.source, winner.language.context)
 
   // ── the rows ─────────────────────────────────────────────────────────────
-  const merged: SuggestionItem[] = [...winner.items(context)]
-  for (const source of ordered) {
-    if (source === winner || source.merge !== true) continue
-    merged.push(...source.items(context))
+  const merged: SuggestionItem[] = [...winner.source.items(winner.language.context)]
+  for (const candidate of ordered) {
+    if (candidate === winner || candidate.source.merge !== true) continue
+    merged.push(...candidate.source.items(candidate.language.context))
   }
   if (merged.length === 0) return undefined
 
@@ -133,7 +192,10 @@ export function complete<State>(
       indices: entry.indices,
     })),
     needle,
-    sourceId: winner.id,
+    sourceId: winner.source.id,
+    // The language the row came from, so an accepted row can be handed to THAT grammar's
+    // `onAccept` rather than always to the document's own.
+    grammarId: winner.language.resolved.grammar.id,
   }
 }
 
@@ -152,8 +214,11 @@ function resolveRange<State>(
 
 /**
  * Build everything a completion source may look at.
- * @param inspection - the current inspection.
- * @param resolved - the resolved grammar.
+ *
+ * @param inspection - the current inspection, whose tokens and diagnostics are shared by
+ *   every language in play — there is one paint, however many grammars produced it.
+ * @param resolved - the resolved grammar of the language asking.
+ * @param state - that language's own analysis.
  * @param caret - the caret offset.
  * @param trigger - how the list came to be open.
  * @returns the context.
@@ -161,12 +226,17 @@ function resolveRange<State>(
 function completionContext<State>(
   inspection: Inspection<State>,
   resolved: ResolvedGrammar<State>,
+  state: State,
   caret: number,
   trigger: CompletionTrigger,
 ): CompletionContext<State> {
-  const { text, tokens, diagnostics, state } = inspection
+  const { text, tokens, diagnostics } = inspection
   const line = lineAt(text, caret, lineStarts(text))
   const lineTokens = tokensOnLine(tokens, line.number)
+  // The word is grown with THIS language's predicate, which is what makes a completion in an
+  // embedded region replace the embedded language's idea of a word: `-apple-system` is one
+  // word where the grammar says so, and `a.b` is one name in a language whose names carry a
+  // dot.
   const word = wordInfoAt(text, caret, resolved.wordChars)
   return {
     text,

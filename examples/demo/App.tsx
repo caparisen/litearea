@@ -1,11 +1,11 @@
 // ─── the demo app ───────────────────────────────────────────────────────────
 //
-// One page, three sections, and one rule the whole layout obeys: nothing here ever
-// writes text into an editor except `setValue`. The editor owns its document, so
-// React state holds a MIRROR of the text for the panels beside it and never a
+// One page, three grammar panels, and one rule the whole layout obeys: nothing here
+// ever writes text into an editor except `setValue`. The editor owns its document,
+// so React state holds a MIRROR of the text for the panels beside it and never a
 // source of truth — which is the subject of the last section.
 //
-// The grammars here are the demo's OWN, both of them beside this file under
+// The grammars here are the demo's OWN, all of them beside this file under
 // `examples/demo/grammars/`. The library ships no syntax, and the two production
 // DSLs this editor came out of — dsh-font's font query and dsh-sentry's
 // appearance document — now live with the plugins that own them. The demo neither
@@ -19,11 +19,13 @@ import type {
   Diagnostic,
   Grammar,
   HoverInfo,
+  LanguageSpan,
   LiteArea,
   LiteAreaHover,
   LiteAreaSizing,
 } from '@citisen/litearea'
 import { LiteAreaEditor } from '@citisen/litearea/react'
+import { COMPOSITE_DEFAULT, compositeGrammar } from './grammars/composite'
 import { MINI_DEFAULT, miniConfGrammar, type MiniState } from './grammars/mini'
 import {
   SWATCH_DEFAULT,
@@ -56,6 +58,16 @@ const swatchOptions: SwatchOptions = {
 const swatch = swatchGrammar(swatchOptions)
 
 const miniGrammar = miniConfGrammar()
+
+/**
+ * Markdown with four languages embedded in it.
+ *
+ * The one grammar here whose document is not a single language: a fence hands its content
+ * to the grammar its info string names, which is what gives the third panel something the
+ * other two cannot show — a caret, a completion, and a `Ctrl+/` that change language as
+ * they cross a fence.
+ */
+const composite = compositeGrammar()
 
 // ── the controls ────────────────────────────────────────────────────────────
 
@@ -166,7 +178,7 @@ export function App(): React.ReactElement {
       <header className="demo-head">
         <h1>litearea</h1>
         <p>
-          Two grammars written for this demo, one editor, and no text ever pushed back into it.
+          Three grammars written for this demo, one editor, and no text ever pushed back into it.
           Each panel below is the same React component with different data; the last section shows
           why that component has no <code>value</code>/<code>onChange</code> loop to fight over.
           The library ships no syntax, and the real DSLs it came out of live beside the plugins
@@ -305,7 +317,7 @@ export function App(): React.ReactElement {
   )
 }
 
-/** The demo's two grammar panels. */
+/** The demo's three grammar panels. */
 function DemoPanels(props: {
   editorProps: EditorProps
   editors: React.RefObject<Map<string, LiteArea<unknown>>>
@@ -318,6 +330,7 @@ function DemoPanels(props: {
     <>
       <SwatchPanel {...shared} />
       <MiniPanel {...shared} />
+      <CompositePanel {...shared} />
     </>
   )
 }
@@ -498,6 +511,73 @@ function MiniPanel(props: PanelProps): React.ReactElement {
   )
 }
 
+// ── panel 3: composite (one document, four embedded languages) ──────────────
+
+function CompositePanel(props: PanelProps): React.ReactElement {
+  // The state is `unknown`: this grammar has no `analyze` of its own, because the analysis
+  // worth reading here is the language table rather than a shape the outer document has.
+  const state = useEditorPanel<unknown>({
+    id: 'composite',
+    title: 'composite',
+    grammar: composite,
+    defaultValue: COMPOSITE_DEFAULT,
+    ...props,
+  })
+
+  const languages = state.languages
+  return (
+    <section className="demo-panel">
+      <PanelHead
+        title="composite (Markdown with four embedded languages)"
+        subtitle="A fence per language: `json`, `js`, `html` — which embeds its own `js` — and `css`, plus one fence naming a language nobody registered, which is a fence and not an error. Completion, hover, `Ctrl+/`, and word selection all follow the caret into the embedded language, so the same keystroke means different things on either side of a fence."
+      />
+      {state.editor}
+      <Diagnostics diagnostics={state.diagnostics} showSource />
+      <section className="demo-readout">
+        <h4>Grammar analysis — the embedded languages, in document order</h4>
+        {languages === undefined ? (
+          <p className="demo-empty">waiting for the first inspection…</p>
+        ) : (
+          <>
+            <ul className="demo-facts">
+              <li>
+                languages found: <code>{languages.length}</code>{' '}
+                <span className="demo-note">
+                  one span per fence naming a language the document knows, and one more per
+                  language an embedded language embeds
+                </span>
+              </li>
+              <li>
+                depth: <code>1</code> for a language the document embeds directly,{' '}
+                <code>2</code> for one inside those{' '}
+                <span className="demo-note">
+                  the JavaScript in the HTML fence is the deeper of the two
+                </span>
+              </li>
+              <li>
+                info string: <code>groups[1]</code> of the region&rsquo;s <code>begin</code>, which
+                is the word the fence names its language with
+              </li>
+            </ul>
+            <ul className="demo-langs">
+              {languages.map((span) => (
+                <li key={`${String(span.from)}:${span.id}`}>
+                  <code>{span.id}</code>
+                  <span className="demo-depth">depth {span.depth}</span>
+                  <span className="demo-note">{span.groups[1] ?? '—'}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+      <CompletionPanel completion={state.completion} />
+      <HoverPanel hover={state.hover} />
+      <PanelFoot label="Reset to the composite document" onReset={state.reset} />
+    </section>
+  )
+}
+
 // ── the piece every panel shares ────────────────────────────────────────────
 
 /** What {@link useEditorPanel} hands back. */
@@ -507,6 +587,15 @@ interface PanelState<State> {
   completion: Completion | undefined
   hover: HoverInfo | undefined
   analysis: State | undefined
+  /**
+   * Every embedded language the inspection found, outermost first, or `undefined`
+   * before the first one.
+   *
+   * A copy of `Inspection.languages` rather than of the grammar's own state: a
+   * composite document's shape IS which languages it holds and how deeply, and a
+   * grammar that declares no `analyze` has no state to report at all.
+   */
+  languages: readonly LanguageSpan[] | undefined
   reset: () => void
 }
 
@@ -535,7 +624,12 @@ function useEditorPanel<State>(config: {
   const [completionState, setCompletionState] = React.useState<Completion | undefined>(undefined)
   const [hoverState, setHoverState] = React.useState<HoverInfo | undefined>(undefined)
   const [inspection, setInspection] = React.useState<
-    { text: string; state: State; diagnostics: readonly Diagnostic[] } | undefined
+    {
+      text: string
+      state: State
+      diagnostics: readonly Diagnostic[]
+      languages: readonly LanguageSpan[]
+    } | undefined
   >(undefined)
 
   /** Re-read what the editor has already computed, rather than computing it twice. */
@@ -543,7 +637,12 @@ function useEditorPanel<State>(config: {
     const current = editor.inspection
     setDiagnostics(editor.diagnostics)
     if (current !== undefined) {
-      setInspection({ text: current.text, state: current.state, diagnostics: current.diagnostics })
+      setInspection({
+        text: current.text,
+        state: current.state,
+        diagnostics: current.diagnostics,
+        languages: current.languages,
+      })
     }
   }, [])
 
@@ -594,6 +693,7 @@ function useEditorPanel<State>(config: {
     completion: completionState,
     hover: hoverState,
     analysis: inspection?.state,
+    languages: inspection?.languages,
     // `true` is what makes the reset undoable, which is the whole point of the button.
     reset: () => {
       void editors.current.get(id)?.setValue(defaultValue, true)
@@ -623,7 +723,17 @@ function PanelFoot(props: { label: string; onReset: () => void }): React.ReactEl
   )
 }
 
-function Diagnostics(props: { diagnostics: readonly Diagnostic[] }): React.ReactElement {
+/**
+ * The problem list, with the range and the message of each one.
+ *
+ * `showSource` adds the column a composite document needs: the id of the grammar that
+ * raised the problem, so a squiggle inside a fence is attributable to `json` or `css`
+ * rather than to the Markdown around it.
+ */
+function Diagnostics(props: {
+  diagnostics: readonly Diagnostic[]
+  showSource?: boolean
+}): React.ReactElement {
   const { diagnostics } = props
   return (
     <section className="demo-readout">
@@ -637,6 +747,7 @@ function Diagnostics(props: { diagnostics: readonly Diagnostic[] }): React.React
           <thead>
             <tr>
               <th>severity</th>
+              {props.showSource === true ? <th>source</th> : null}
               <th>code</th>
               <th>range</th>
               <th>message</th>
@@ -650,6 +761,11 @@ function Diagnostics(props: { diagnostics: readonly Diagnostic[] }): React.React
                     {diagnostic.severity}
                   </span>
                 </td>
+                {props.showSource === true ? (
+                  <td>
+                    <code>{diagnostic.source ?? '—'}</code>
+                  </td>
+                ) : null}
                 <td>
                   <code>{diagnostic.code ?? '—'}</code>
                 </td>

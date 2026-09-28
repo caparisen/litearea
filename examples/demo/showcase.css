@@ -88,6 +88,67 @@ section h2 {
   margin: 2px 0;
 }
 
+/* ── a section's readout ───────────────────────────────────────────────────── */
+
+/*
+ * The card a section that has something live to say puts beside its editor. It is a copy
+ * of the editor's own analysis, so it is styled as a readout rather than as prose: a
+ * caption per list, and one row per fact.
+ */
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--page-line);
+  border-radius: 10px;
+  background: var(--page-card);
+}
+
+.readout h3 {
+  margin: 0;
+  color: var(--page-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.languages,
+.diagnostics {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.languages li,
+.diagnostics li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 0;
+}
+
+.languages li + li,
+.diagnostics li + li {
+  border-top: 1px solid var(--page-line);
+}
+
+/* One pill, two facts: a nesting depth in the first list, a severity in the second. */
+.depth {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--page-line);
+  border-radius: 999px;
+  color: var(--page-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .binding {
   /* The editor's own box sets its border and radius; this only gives it room. */
   margin-top: 4px;

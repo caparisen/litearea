@@ -19,9 +19,13 @@ export type {
   Grammar,
   HoverContext,
   HoverInfo,
+  LanguageSpan,
   LineInfo,
   MatchRule,
   Range,
+  RegionEmbed,
+  RegionEnd,
+  RegionFrame,
   RegionRule,
   ResolvedVocabulary,
   Rule,
@@ -76,7 +80,13 @@ export {
 
 export { buildSegments, segmentClasses, type PaintSegment, type SegmentInput } from './segments.js'
 
-export { inspect, normalizeDiagnostics, type Inspection } from './inspect.js'
+export {
+  inspect,
+  languageAt,
+  languageChain,
+  normalizeDiagnostics,
+  type Inspection,
+} from './inspect.js'
 
 export {
   fuzzyMatch,

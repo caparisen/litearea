@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-**A code editor over a plain `<textarea>`: undo and redo that work, highlighting from rules you write, and VSCode-shaped completion — with no runtime dependency.**
+**A code editor over a plain `<textarea>`: undo and redo that work, highlighting from rules you write (a rule may embed another language), and VSCode-shaped completion — with no runtime dependency.**
 
 `@citisen/litearea` is a library, not a plugin. Nothing here registers with an
 interface, reads a settings namespace, or knows what a favicon is. It is a small
@@ -49,9 +49,10 @@ So this library makes the opposite choices, and each one is load-bearing:
 - **The caret does not move, because nothing rewrites the text under it.** The
   layer reads the field; it never writes it. The only selection writes are
   `setSelectionRange` calls a completion asked for.
-- **One parse per text.** `inspect(text, grammar)` runs once, and the paint, the
-  squiggles, the semantic marks, the completion list, and the hover tooltip all
-  read that same value. They cannot drift because there is nothing to drift from.
+- **One parse per text.** `inspect(text, grammar)` runs once — and a grammar that embeds
+  another language is inspected once more, over that region's text alone — and the paint,
+  the squiggles, the semantic marks, the completion list, and the hover tooltip all read
+  that same value. They cannot drift because there is nothing to drift from.
 
 ## Install
 
@@ -170,6 +171,7 @@ undoable, and it does not call `onChange` — the caller already knows what it w
 | Undo and redo | The field is written once, at construction. Every library edit goes through `execCommand('insertText')`, so the browser's own history records it |
 | A caret that stays put | Nothing rewrites the text under it; the only selection writes are the ones a completion asked for |
 | Custom highlighting | `rules` paint scopes; a scope becomes the class `litearea-scope-<scope>`, and the stylesheet decides the rest. The core ships no syntax at all |
+| Composite languages | A `region` may declare `grammar`, and the embedded language is inspected over that region's content alone; its paint, diagnostics, decorations, completion, and hover are spliced into the document at the region's offsets. Both grammars are the host's — nothing is bundled |
 | Completion | Sources over a range recomputed from the caret on every filter, tiered fuzzy ranking, a documentation panel, commit characters, and mouse picks that do not blur the field |
 | Diagnostics | A vocabulary's rejection, declarative `checks`, and a `validate` hook, merged, deduplicated, and painted as squiggles in four severities |
 | Hover tooltips | `resolveHover`: a diagnostic outranks everything else; otherwise a decoration's title and the grammar's own `describe` are shown together |
@@ -304,6 +306,77 @@ diagnostic vocabulary, and an end-to-end walkthrough that adds `analyze`,
 `checks`, and `validate` to this same language — is in
 [docs/grammar.md](docs/grammar.md).
 
+## Composite languages
+
+A `region` rule can hand its content to another grammar. The region is opaque to the
+outer language — its content is found in one search, so the outer rules never run inside
+it — and the embedded language is inspected over that content alone: its own `rules`
+paint it, its own `analyze`, `checks`, and `validate` run on it, and its own `compose`,
+`describe`, `pairs`, and `comments` answer the caret inside it. One field does it:
+
+```ts
+import { defineGrammar } from '@citisen/litearea'
+import type { Grammar } from '@citisen/litearea'
+import { cssGrammar, jsGrammar, jsonGrammar } from './languages'
+
+// The host's languages. The library ships none of them.
+const LANGUAGES: Readonly<Record<string, Grammar>> = {
+  json: jsonGrammar,
+  js: jsGrammar,
+  css: cssGrammar,
+}
+
+export const markdown = defineGrammar({
+  id: 'markdown',
+  name: 'Markdown',
+  rules: [
+    {
+      kind: 'region',
+      scope: 'code.fence',
+      // Capture group 1 is the info string, and that is what the chooser reads.
+      begin: /```(\w*)[^\n]*/,
+      end: /^[ \t]*```/m,
+      openScope: 'md.fence.marker',
+      closeScope: 'md.fence.marker',
+      contentScope: 'code',
+      // ONE fence rule carries every embedded language.
+      grammar: (frame) => LANGUAGES[frame.groups[1] ?? ''],
+      unclosed: {
+        message: 'This code fence is never closed.',
+        code: 'unclosed-fence',
+        severity: 'warning',
+      },
+    },
+    { kind: 'match', scope: 'md.word', pattern: /[^\s`]+/ },
+  ],
+})
+```
+
+`grammar` may be a grammar or a function of the `RegionFrame` the region opened, and
+`rules` — a rule list that runs inside the region instead of the outer one — may be
+either too. A chooser that returns `undefined` leaves an ordinary opaque region, which is
+the answer for a fence naming a language the document does not know. Nothing about this
+bundles a language: both the outer grammar and the embedded ones are values the host
+wrote and handed to the editor.
+
+A reader gets the embedded language rather than a tint. A fence that says `json` is painted
+by the JSON grammar — its keys, strings, numbers, and literals in their own scopes — and
+if that grammar reports a duplicated key, the warning carries `source: 'json'`. With the
+caret in the fence, the completion list, the hover, and `Ctrl+/` all belong to JSON:
+
+| Inside a fence | What answers |
+| --- | --- |
+| The paint | The embedded grammar's `rules`, spliced into the document at the region's offsets |
+| A squiggle | The embedded grammar's own diagnostics — its lexical pass, its `checks`, and its `validate` — merged with every other language's and stamped with their own grammar's `id` as `source` |
+| Completion and hover | The embedded grammar's `compose` sources and `describe`, innermost language first |
+| `wordChars`, `pairs`, `Ctrl+/` | The language at the caret declares all three, so an inner comment marker is written inside a fence and the outer one outside it |
+
+`inspect` returns an `Inspection.languages` table — one span per embedded language
+instance, nested as deeply as the languages are — and `languageAt(inspection, offset)` /
+`languageChain(inspection, offset)` read it. The complete contract, including what
+embedding deliberately does not do, is in
+[docs/grammar.md](docs/grammar.md#embedded-languages).
+
 ## No grammar is shipped
 
 There is no built-in language, no language identifier to switch on, no bundled
@@ -311,6 +384,12 @@ tokenizer, and no grammar to import: nothing in `src/core/` knows what a font
 stack is, and the package publishes no grammar entry point. A caller supplies the
 rules, and the two examples in this file are the whole of what this repository
 offers as a worked language.
+
+That is still true of a language that embeds another. A region may declare `grammar`
+and hand its content to a grammar the host wrote, so a Markdown grammar can carry JSON,
+JavaScript, CSS, and HTML — and the HTML can carry JavaScript and CSS in turn — without
+the library shipping any of them. The capability is the engine's; every language in a
+composite document is still the caller's.
 
 That is a deliberate boundary rather than an omission. The editor came out of two
 plugins with real DSLs — dsh-sentry's appearance document and dsh-font's font
@@ -730,9 +809,12 @@ change colour, background, and `text-decoration`, and nothing that moves a glyph
 - **The painted layer can only change colour, background, and text-decoration.**
   Anything that changes an advance — another font, a weight, letter spacing, a
   font feature — slides the paint off the character it belongs to by a different
-  amount on every character.
+  amount on every character. An embedded language is no exception: it paints
+  scopes like any other, and the whole field keeps one typography whatever
+  languages it holds.
 - **`inspect` runs the whole scan for each new text.** There is no incremental
-  re-lex, so a very large document costs a full pass per keystroke. The paint is
+  re-lex, so a very large document costs a full pass per keystroke — plus one
+  nested pass per embedded region, each over its own region's text. The paint is
   skipped when the text and the analysis are unchanged, which is what keeps
   caret moves and hovers cheap.
 - **Hover needs a caret hit-test.** It asks

@@ -302,6 +302,48 @@ body {
   margin-top: 2px;
 }
 
+/*
+ * The embedded languages, one row per span the analysis found. The list is a plain
+ * sequence of facts about the document rather than a table, because there is nothing
+ * to line up: an id, how deep it sits, and the info string that opened it.
+ */
+.demo-langs {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.demo-langs li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 2px 0;
+}
+
+.demo-langs li + li {
+  border-top: 1px solid var(--demo-border);
+}
+
+/* The info string is prose about the id beside it, so it takes the wrapping room. */
+.demo-langs .demo-note {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* How many languages enclose a span, as a badge next to its id. */
+.demo-depth {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--demo-border);
+  border-radius: 999px;
+  color: var(--demo-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .demo-app code,
 .demo-compare code {
   padding: 1px 4px;

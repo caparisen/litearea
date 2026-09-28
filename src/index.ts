@@ -29,9 +29,13 @@ export type {
   Grammar,
   HoverContext,
   HoverInfo,
+  LanguageSpan,
   LineInfo,
   MatchRule,
   Range,
+  RegionEmbed,
+  RegionEnd,
+  RegionFrame,
   RegionRule,
   ResolvedVocabulary,
   Rule,
@@ -86,7 +90,13 @@ export {
   type ScanResult,
 } from './core/scan.js'
 
-export { inspect, normalizeDiagnostics, type Inspection } from './core/inspect.js'
+export {
+  inspect,
+  languageAt,
+  languageChain,
+  normalizeDiagnostics,
+  type Inspection,
+} from './core/inspect.js'
 
 export {
   buildSegments,

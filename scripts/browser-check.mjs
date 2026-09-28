@@ -1266,6 +1266,88 @@ const CHECKLIST = String.raw`
           }
         }
 
+        // ── 17. an embedded language, in a browser ─────────────────────────
+        // The composite half of the engine is a set of decisions, and the unit tests own
+        // those. Three things here are not decisions, and they are the reason this section
+        // exists: that the SECOND language's spans really reach the painted layer, that a
+        // keystroke shaped decision (the comment toggle) is made by the language at the caret
+        // in a field the browser owns, and that the resulting edit is one entry in the
+        // browser's own history — the promise the whole library is built around, now made by
+        // an edit an embedded language asked for.
+        const inner = api.defineGrammar({
+          id: 'browser-inner',
+          rules: [
+            { kind: 'match', scope: 'inner-comment', pattern: /\/\/[^\n]*/ },
+            { kind: 'match', scope: 'inner-word', pattern: /[a-z]+/ },
+          ],
+          comments: { line: '//' },
+        })
+        const outer = api.defineGrammar({
+          id: 'browser-outer',
+          rules: [
+            {
+              kind: 'region',
+              scope: 'fence',
+              begin: /\[\[/,
+              end: /\]\]/,
+              contentScope: 'fence-body',
+              grammar: inner,
+            },
+            { kind: 'match', scope: 'outer-word', pattern: /[a-z]+/ },
+          ],
+          comments: { block: ['<!--', '-->'] },
+        })
+
+        const embedded = mount(outer, 'alpha\n[[beta gamma]]\ndelta')
+        const embeddedPaint = paintOf(embedded)
+        check(
+          embeddedPaint.textContent === embedded.input.value,
+          'the layer must reproduce a composite document character for character (got ' +
+            JSON.stringify(embeddedPaint.textContent) + ')',
+        )
+        check(
+          embeddedPaint.querySelector('.litearea-scope-inner-word') !== null,
+          'the embedded language must paint its own scope class into the layer',
+        )
+        check(
+          embeddedPaint.querySelector('.litearea-scope-outer-word') !== null,
+          'the outer language must keep painting outside the region',
+        )
+
+        embedded.focus()
+        embedded.setSelection(embedded.input.value.indexOf('beta') + 2)
+        embedded.input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true, cancelable: true }),
+        )
+        // The embedded language is the one asked, and its marker is the LINE form — so the whole
+        // line is commented, fence delimiters included. That is the documented behaviour of a
+        // line marker: it comments lines, whatever the selection spans. What the check proves is
+        // that the marker came from the language at the caret and not from the outer grammar,
+        // whose only marker is the block form it writes in the control below.
+        check(
+          embedded.input.value === 'alpha\n// [[beta gamma]]\ndelta',
+          'the comment toggle inside an embedded region must write the line marker of THAT ' +
+            'language (got ' + JSON.stringify(embedded.input.value) + ')',
+        )
+        document.execCommand('undo')
+        check(
+          embedded.input.value === 'alpha\n[[beta gamma]]\ndelta',
+          'undoing the comment toggle of an embedded language must take it back (got ' +
+            JSON.stringify(embedded.input.value) + ')',
+        )
+
+        // The control: the same chord outside the region writes the OUTER language's marker,
+        // which is the block form because this fixture's outer language has no line marker.
+        embedded.setSelection(1)
+        embedded.input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true, cancelable: true }),
+        )
+        check(
+          embedded.input.value.indexOf('<!--') >= 0,
+          'the comment toggle outside the region must write the marker of the outer language (got ' +
+            JSON.stringify(embedded.input.value) + ')',
+        )
+
         // A host's own write at the very end: it must be accepted without throwing,
         // and it is deliberately not a check, because a direct assignment is exactly
         // what the control above proved the pipeline does not record.

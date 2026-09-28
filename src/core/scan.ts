@@ -25,6 +25,8 @@ import type {
   Diagnostic,
   Grammar,
   LineInfo,
+  RegionEmbed,
+  RegionFrame,
   RegionRule,
   Rule,
   RuleContext,
@@ -81,6 +83,41 @@ export interface ScanResult<State = unknown> {
   diagnostics: Diagnostic[]
   /** Whatever `Grammar.analyze` returned, or `initialState`. */
   state: State
+  /**
+   * The regions an embedded grammar owns, in document order.
+   *
+   * The lexical pass does not run an embedded language — that is `inspect`'s job, because
+   * a nested language brings its own analysis, checks, and decorations with it. What the
+   * scan does is find where each one begins and ends and hand the content over; this list
+   * is that handover.
+   */
+  embeds: RegionEmbed[]
+}
+
+/**
+ * A region that is currently open, with everything its interior needs.
+ *
+ * It is a superset of the public {@link RegionFrame}, because the same object is handed
+ * to a dynamic `end` and to every scope function inside the region — one frame, one
+ * answer about where the match is.
+ */
+interface OpenRegion<State> extends RegionFrame {
+  rule: RegionRule<State>
+  /** The offset after the opening delimiter. */
+  contentFrom: number
+  /** The closing pattern, resolved from a dynamic `end` when the region opened. */
+  end: RegExp | undefined
+  /** The compiled escape set, when the rule declared one. */
+  escaped: RegExp | undefined
+  /**
+   * The rule list that runs inside, when one does.
+   *
+   * `undefined` with `runsRules` true means the outer list — a `transparent` region. A
+   * region that runs no list at all is opaque and is painted as it is searched.
+   */
+  innerRules: readonly Rule<State>[] | undefined
+  /** Whether any rule list runs inside this region. */
+  runsRules: boolean
 }
 
 /** The word predicate a grammar that does not declare one gets. */
@@ -183,6 +220,8 @@ export function scan<State>(
 
   const tokens: Token[] = []
   const diagnostics: Diagnostic[] = []
+  /** The embedded-language territories this scan found, in document order. */
+  const embeds: RegionEmbed[] = []
   const starts = lineStarts(source)
   const length = source.length
 
@@ -203,6 +242,59 @@ export function scan<State>(
   let cachedLineBounds: { from: number; to: number; text: string } | undefined
   /** Compiled `prevNot` character classes, per rule context. */
   const prevNotCache = new WeakMap<RuleContext, RegExp>()
+  /** Compiled `escapes` character classes, per region rule. */
+  const escapeCache = new WeakMap<RegionRule<any>, RegExp>()
+
+  /**
+   * The character-class test for a region's escape set, if it declared one.
+   *
+   * The set is a string of CHARACTERS, not a class body: `escapes: '\\'` in a TypeScript
+   * source is one backslash, which is what a grammar author means by it. Each character is
+   * escaped for the class here, so a `]` or a `-` in the set is a character and not the end
+   * of the class.
+   * @param rule - the region rule.
+   * @returns the compiled class, or undefined when the region has no escapes.
+   */
+  const escapePatternOf = (rule: RegionRule<any>): RegExp | undefined => {
+    if (rule.escapes === undefined) return undefined
+    const cached = escapeCache.get(rule)
+    if (cached !== undefined) return cached
+    const body = [...rule.escapes].map((char) => char.replace(/[\\\]^/-]/g, '\\$&')).join('')
+    const compiled = new RegExp(`[${body}]`)
+    escapeCache.set(rule, compiled)
+    return compiled
+  }
+
+  /**
+   * Whether the characters immediately before an offset escape it.
+   *
+   * Escaping is counted rather than flagged, because that is what it is: `"a\\"` is a
+   * closed string as far as the reader is concerned, and only an ODD number of escape
+   * characters makes the delimiter behind them part of the text. A grammar that treated
+   * any backslash as an escape would read `"a\\"` as an unterminated string and tint the
+   * rest of the file.
+   * @param index - the offset of the closing delimiter.
+   * @param pattern - the escape character class, if the region declared one.
+   * @returns whether the delimiter is escaped.
+   */
+  const escapedAt = (index: number, pattern: RegExp | undefined): boolean =>
+    isEscaped(source, index, pattern)
+
+  /**
+   * The content scopes of the regions currently open, outermost first.
+   *
+   * Rebuilt only when the stack actually changed, because a rule gated by `region` asks
+   * this question at every position it is tried at and the answer is the same until a
+   * delimiter moves.
+   */
+  let regionVersion = 0
+  let regionScopeCache: { version: number; scopes: readonly Scope[] } = { version: -1, scopes: [] }
+  const regionScopeList = (): readonly Scope[] => {
+    if (regionScopeCache.version !== regionVersion) {
+      regionScopeCache = { version: regionVersion, scopes: openRegions.map((frame) => frame.scope) }
+    }
+    return regionScopeCache.scopes
+  }
 
   /** The line record for a position, with the column computed for that position. */
   const lineInfoAt = (position: number): LineInfo => {
@@ -272,6 +364,16 @@ export function scan<State>(
     }
     if (when.notAfter !== undefined && previousScope !== undefined) {
       if (when.notAfter.includes(previousScope)) return false
+    }
+    // The region predicates are the composite-language half of this function: they are
+    // what lets one language's rules stand down inside another's territory, and they are
+    // answered from the region stack the scanner is already keeping.
+    const inside = when.region
+    const outside = when.notInRegion
+    if (inside !== undefined || outside !== undefined) {
+      const open = regionScopeList()
+      if (inside !== undefined && !open.some((scope) => inside.includes(scope))) return false
+      if (outside !== undefined && open.some((scope) => outside.includes(scope))) return false
     }
     if (when.line !== undefined && !when.line.test(info.text)) return false
     if (when.minColumn !== undefined && info.column < when.minColumn) return false
@@ -344,12 +446,36 @@ export function scan<State>(
     })
   }
 
-  /** The `RuleMatch` a scope function is handed. */
+  /**
+   * The `RuleMatch` a scope function is handed.
+   *
+   * Inside a region it also carries where the match IS, because a scope function that
+   * serves several embedded languages has nothing else to go on: `region` is the
+   * innermost content scope, `regions` the whole stack, `beginGroups` the capture groups
+   * of the delimiter that opened the innermost one — which is how a fence that carries an
+   * info string tells the rules inside it which language they are painting.
+   */
   const ruleMatch = (
     text: string,
     from: number,
     groups: readonly (string | undefined)[],
-  ): RuleMatch<State> => ({ text, source, from, groups, state })
+  ): RuleMatch<State> => {
+    const frame = openRegions[openRegions.length - 1]
+    if (frame === undefined) return { text, source, from, groups, state }
+    return {
+      text,
+      source,
+      from,
+      groups,
+      state,
+      region: frame.scope,
+      regions: regionScopeList(),
+      depth: frame.depth,
+      grammarId: sourceId,
+      beginGroups: frame.groups,
+      beginText: frame.open,
+    }
+  }
 
   // ── reading words ────────────────────────────────────────────────────────
 
@@ -420,18 +546,35 @@ export function scan<State>(
     return undefined
   }
 
-  /** Whether any rule would claim a position, which is what ends an unclaimed run. */
-  const anyRuleClaims = (index: number, previous: Scope | undefined): boolean => {
-    // A nested region's closing delimiter is a claim even though no rule mentions
-    // it at this position. Without this the run would swallow the delimiter, the
-    // region would never close, and a perfectly well-formed document would be
-    // reported as unterminated.
-    const openRegion = openRegions[openRegions.length - 1]
-    if (openRegion !== undefined) {
-      const endMatch = execAt(sticky(openRegion.rule.end), source, index)
-      if (endMatch !== null && endMatch[0].length > 0) return true
+  /**
+   * Whether any rule would claim a position, which is what ends an unclaimed run.
+   *
+   * @param index - the position.
+   * @param previous - the nearest preceding non-whitespace scope, from the run's own point of view.
+   * @param activeRules - the rule list running at this position, which is the frame's when one is open.
+   * @param frame - the open region the list belongs to, when one is.
+   * @returns whether something claims the position.
+   */
+  const anyRuleClaims = (
+    index: number,
+    previous: Scope | undefined,
+    activeRules: readonly Rule<State>[],
+    frame: OpenRegion<State> | undefined,
+  ): boolean => {
+    // A region's closing delimiter is a claim even though no rule mentions it at this
+    // position. Without this the run would swallow the delimiter, the region would never
+    // close, and a perfectly well-formed document would be reported as unterminated.
+    if (frame !== undefined && frame.end !== undefined) {
+      const endMatch = execAt(sticky(frame.end), source, index)
+      if (
+        endMatch !== null &&
+        endMatch[0].length > 0 &&
+        !escapedAt(index, frame.escaped)
+      ) {
+        return true
+      }
     }
-    for (const rule of rules) {
+    for (const rule of activeRules) {
       if (!contextHolds(rule.when, index, previous)) continue
       if (rule.kind === 'region') {
         const match = execAt(sticky(rule.begin), source, index)
@@ -454,14 +597,151 @@ export function scan<State>(
 
   // ── the main loop ────────────────────────────────────────────────────────
 
-  /** The regions currently open, innermost last. Only a nested region uses the stack. */
-  const openRegions: Array<{
-    rule: RegionRule<State>
-    scope: Scope
-    /** Where the opening delimiter was, so an unterminated region can be reported. */
-    beginFrom: number
-    beginTo: number
-  }> = []
+  /**
+   * The regions currently open, innermost last.
+   *
+   * The stack is what makes a composite language possible. It holds one frame per open
+   * delimiter, each with the rule list that runs inside it, the closing pattern that was
+   * resolved for it, and the capture groups of the delimiter that opened it — so a rule
+   * inside knows where it is, and a region can be closed by a pattern derived from the
+   * delimiter that opened it.
+   */
+  const openRegions: Array<OpenRegion<State>> = []
+
+  /** Open a region: the stack changes, so the region predicates are invalidated. */
+  const pushFrame = (frame: OpenRegion<State>): void => {
+    openRegions.push(frame)
+    regionVersion += 1
+    regionScope = frame.scope
+  }
+
+  /** Close the innermost region. */
+  const popFrame = (): void => {
+    openRegions.pop()
+    regionVersion += 1
+    regionScope = openRegions[openRegions.length - 1]?.scope
+  }
+
+  /**
+   * Report a region the document ended inside, over its own opening delimiter.
+   *
+   * The range is the delimiter rather than the rest of the document: an unterminated block
+   * comment is a mistake about where it STARTED, and underlining the rest of the file would
+   * only say what the reader can already see.
+   * @param frame - the frame that is still open.
+   */
+  const reportUnclosed = (frame: OpenRegion<State>): void => {
+    const rule = frame.rule
+    report({
+      from: frame.from,
+      to: frame.contentFrom,
+      message:
+        rule.unclosed?.message === undefined
+          ? `Unterminated ${frame.scope}.`
+          : typeof rule.unclosed.message === 'function'
+            ? rule.unclosed.message(ruleMatch('', frame.from, ['']))
+            : rule.unclosed.message,
+      severity: rule.unclosed?.severity ?? 'error',
+      code: rule.unclosed?.code ?? 'unclosed-region',
+    })
+  }
+
+  /**
+   * The enclosing frame a delimiter at this position really closes, when the innermost one
+   * does not.
+   *
+   * A missing closer is the ordinary state of a document being typed. `<div><span>a</div>`
+   * has a `<span>` with no `</span>`, and the `</div>` that follows is the div's own
+   * delimiter — but the innermost frame is the span's, and its pattern does not match.
+   *
+   * A stack of IDENTICAL delimiters does not have this problem and this function cannot fire
+   * for one: `/* a /* b *&#47;` pairs the brackets with one shared pattern, so the innermost
+   * frame always answers first and `candidate.end === open.end`. What this recovers is the
+   * DYNAMIC end, where every frame resolved a pattern of its own — which is exactly markup,
+   * and exactly the case where a reader expects `</div>` to close the div.
+   * @param index - the position being tested.
+   * @returns the index of the enclosing frame the delimiter closes, or undefined.
+   */
+  const recoverableFrame = (index: number): number | undefined => {
+    const innermost = openRegions[openRegions.length - 1]
+    if (innermost === undefined || innermost.end === undefined) return undefined
+    for (let frame = openRegions.length - 2; frame >= 0; frame -= 1) {
+      const candidate = openRegions[frame]
+      if (candidate === undefined) continue
+      if (candidate.rule !== innermost.rule) continue
+      if (candidate.end === undefined || candidate.end === innermost.end) continue
+      const match = execAt(sticky(candidate.end), source, index)
+      if (match !== null && match[0].length > 0 && !escapedAt(index, candidate.escaped)) {
+        return frame
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * The frame a region would open, built before anything is pushed.
+   *
+   * It is what a dynamic `end`, a dynamic `rules`, and a dynamic `grammar` are all handed,
+   * so the three see one description of the same opening delimiter and cannot disagree about
+   * which language is starting. The frame is also what a `when.region` predicate and a scope
+   * function read once the region is open, which is why it is one object and not four.
+   * @param rule - the region rule.
+   * @param begin - the opening delimiter's match.
+   * @param scope - the content scope of the region.
+   * @param from - where the opening delimiter starts.
+   * @param contentFrom - where the content starts.
+   * @param depth - how many regions enclose this one, this one included.
+   * @param parent - the frame this region opened inside.
+   * @returns the frame.
+   */
+  const frameOf = (
+    rule: RegionRule<State>,
+    begin: RegExpExecArray,
+    scope: Scope,
+    from: number,
+    contentFrom: number,
+    depth: number,
+    parent: OpenRegion<State> | undefined,
+  ): RegionFrame => ({
+    rule,
+    scope,
+    from,
+    contentFrom,
+    open: begin[0],
+    groups: [...begin],
+    text: source,
+    depth,
+    grammarId: sourceId,
+    parent,
+  })
+
+  /**
+   * Resolve a region's closing pattern as it opens.
+   *
+   * A dynamic `end` is called exactly once per frame and its answer is kept, so a function
+   * may read the frame's capture groups — which is the whole point, since `<div>` closes at
+   * `</div>` and no fixed pattern can say so — without the scan paying for the call at every
+   * position inside the region.
+   * @param rule - the region rule.
+   * @param frame - the frame it is opening.
+   * @returns the closing pattern, or undefined when the region names none.
+   */
+  const resolveEnd = (rule: RegionRule<State>, frame: RegionFrame): RegExp | undefined =>
+    typeof rule.end === 'function' ? (rule.end(frame) ?? undefined) : rule.end
+
+  /** The rule list a region runs inside itself, resolved from a function when it declared one. */
+  const resolveRules = (
+    rule: RegionRule<State>,
+    frame: RegionFrame,
+  ): readonly Rule<State>[] | undefined =>
+    typeof rule.rules === 'function' ? rule.rules(frame) : rule.rules
+
+  /** The language a region embeds, resolved from a function when it declared one. */
+  const resolveEmbedded = (
+    rule: RegionRule<State>,
+    frame: RegionFrame,
+  ): Grammar<any> | undefined =>
+    typeof rule.grammar === 'function' ? rule.grammar(frame) : rule.grammar
 
   let index = 0
   while (index < length) {
@@ -469,8 +749,12 @@ export function scan<State>(
 
     if (open !== undefined) {
       // The region's own end is always what is tried first, whatever else the rule allows.
-      const endMatch = execAt(sticky(open.rule.end), source, index)
-      if (endMatch !== null && endMatch[0].length > 0) {
+      const endMatch = open.end === undefined ? null : execAt(sticky(open.end), source, index)
+      if (
+        endMatch !== null &&
+        endMatch[0].length > 0 &&
+        !escapedAt(index, open.escaped)
+      ) {
         const closeScope = scopeOf(
           open.rule.closeScope ?? open.rule.scope,
           ruleMatch(endMatch[0], index, [...endMatch]),
@@ -478,7 +762,35 @@ export function scan<State>(
         )
         push(closeScope, index, index + endMatch[0].length, open.scope)
         index += endMatch[0].length
-        openRegions.pop()
+        popFrame()
+        continue
+      }
+
+      // ── a delimiter that closes a region further out ─────────────────────
+      // Only markup can reach this: see `recoverableFrame`. The regions skipped on the way
+      // out are reported unclosed, innermost first, because that is the order the reader has
+      // to fix them in.
+      const recovery = recoverableFrame(index)
+      if (recovery !== undefined) {
+        for (let frame = openRegions.length - 1; frame > recovery; frame -= 1) {
+          const skipped = openRegions[frame]
+          if (skipped !== undefined) reportUnclosed(skipped)
+        }
+        const closing = openRegions[recovery]
+        if (closing !== undefined && closing.end !== undefined) {
+          const closeMatch = execAt(sticky(closing.end), source, index)
+          if (closeMatch !== null && closeMatch[0].length > 0) {
+            const closeScope = scopeOf(
+              closing.rule.closeScope ?? closing.rule.scope,
+              ruleMatch(closeMatch[0], index, [...closeMatch]),
+              closing.scope,
+            )
+            push(closeScope, index, index + closeMatch[0].length, closing.scope)
+            index += closeMatch[0].length
+          }
+        }
+        openRegions.length = recovery
+        regionVersion += 1
         regionScope = openRegions[openRegions.length - 1]?.scope
         continue
       }
@@ -488,24 +800,43 @@ export function scan<State>(
       // text, not a state. Nesting does NOT lift it — a comment that nests is still a
       // comment all the way down, and a language whose comments behave otherwise would be
       // one nobody could write a comment in.
-      if (open.rule.transparent !== true) {
+      if (!open.runsRules) {
         if (open.rule.nested === true) {
           const inner = execAt(sticky(open.rule.begin), source, index)
           if (inner !== null && inner[0].length > 0) {
             const innerMatch = ruleMatch(inner[0], index, [...inner])
+            const innerFrom = index
+            const innerContent = index + inner[0].length
             push(
               scopeOf(open.rule.openScope ?? open.rule.scope, innerMatch, open.scope),
               index,
-              index + inner[0].length,
+              innerContent,
               open.scope,
             )
-            openRegions.push({
-              rule: open.rule,
-              scope: open.scope,
-              beginFrom: index,
-              beginTo: index + inner[0].length,
+            // The inner frame gets its OWN closing pattern. That is the difference between
+            // a nested comment and nested markup: `[a[b]c]` pairs its brackets with the same
+            // pattern, while `<div><span></span></div>` needs the inner tag to be closed by
+            // its own name, and only a per-frame resolution can say so.
+            const innerFrame = frameOf(
+              open.rule,
+              inner,
+              open.scope,
+              innerFrom,
+              innerContent,
+              open.depth + 1,
+              open,
+            )
+            pushFrame({
+              ...open,
+              from: innerFrom,
+              contentFrom: innerContent,
+              open: inner[0],
+              groups: [...inner],
+              depth: open.depth + 1,
+              parent: open,
+              end: resolveEnd(open.rule, innerFrame),
             })
-            index += inner[0].length
+            index = innerContent
             continue
           }
         }
@@ -513,13 +844,18 @@ export function scan<State>(
         index += 1
         continue
       }
-      // A transparent region falls through: the rule list runs inside it, which is the
-      // whole meaning of the flag.
+      // A region that runs rules falls through to the list below, which is either the
+      // region's own or the outer one, depending on what it declared.
     }
+
+    // The list that runs at this position: the innermost region's own, or the outer list
+    // when the region is transparent and declared none.
+    const activeRules: readonly Rule<State>[] =
+      open !== undefined && open.runsRules ? (open.innerRules ?? rules) : rules
 
     let matched = false
 
-    for (const rule of rules) {
+    for (const rule of activeRules) {
       if (!contextHolds(rule.when, index, previousScope)) continue
 
       if (rule.kind === 'region') {
@@ -531,14 +867,83 @@ export function scan<State>(
         const contentScope = scopeOf(rule.contentScope ?? rule.scope, beginMatch, scope)
         const closeScope = scopeOf(rule.closeScope ?? rule.scope, beginMatch, scope)
         const beginEnd = index + begin[0].length
+        const parent = open
+        const depth = parent === undefined ? 1 : parent.depth + 1
+        const frame = frameOf(rule, begin, contentScope, index, beginEnd, depth, parent)
+        // Both of these may be functions of the frame, which is how one fence rule carries
+        // every embedded language: `grammar: (frame) => BY_NAME[frame.groups[1]]` reads the
+        // info string and hands the content to the language it names.
+        const dynamicRules = resolveRules(rule, frame)
+        const embedded = resolveEmbedded(rule, frame)
         push(openScope, index, beginEnd, regionScope)
 
-        // A region that only nests, or that is transparent, is tracked on the stack; the
-        // stack is what its end is matched against, and what an unterminated one is reported
-        // from. Everything else takes the fast path below.
-        if (rule.nested === true || rule.transparent === true) {
-          openRegions.push({ rule, scope: contentScope, beginFrom: index, beginTo: beginEnd })
-          regionScope = contentScope
+        // ── the embedded language, which is the whole composite feature ────────
+        // A region that declares `grammar` owns everything between its delimiters. The
+        // outer rule list never runs inside it and its delimiters are its own business, so
+        // it is found in one search; `inspect` then reads the content with the nested
+        // grammar and splices the result back in at these offsets. Keeping the region a
+        // single span is also what keeps the language table a list of DISJOINT ranges,
+        // which is what every caret-shaped feature reads.
+        if (embedded !== undefined) {
+          const end = resolveEnd(rule, frame)
+          const close =
+            end === undefined
+              ? undefined
+              : findRegionEnd(end, source, beginEnd, escapePatternOf(rule))
+          const contentTo = close === undefined ? length : close.from
+          push(contentScope, beginEnd, contentTo, scope)
+          embeds.push({
+            rule,
+            grammar: embedded,
+            from: index,
+            to: close === undefined ? length : close.to,
+            contentFrom: beginEnd,
+            contentTo,
+            scope: contentScope,
+            groups: [...begin],
+            open: begin[0],
+            depth,
+          })
+          if (close === undefined) {
+            report({
+              from: index,
+              to: beginEnd,
+              message:
+                rule.unclosed?.message === undefined
+                  ? `Unterminated ${scope}.`
+                  : typeof rule.unclosed.message === 'function'
+                    ? rule.unclosed.message(beginMatch)
+                    : rule.unclosed.message,
+              severity: rule.unclosed?.severity ?? 'error',
+              code: rule.unclosed?.code ?? 'unclosed-region',
+            })
+            index = length
+          } else {
+            push(closeScope, close.from, close.to, scope)
+            index = close.to
+          }
+          matched = true
+          break
+        }
+
+        // A region that runs a rule list, or that only nests, is tracked on the stack: the
+        // stack is what its end is matched against, what the rules inside read, and what an
+        // unterminated one is reported from. Everything else takes the fast path below.
+        const runsRules = dynamicRules !== undefined || rule.transparent === true
+        if (runsRules || rule.nested === true) {
+          pushFrame({
+            ...frame,
+            end: resolveEnd(rule, frame),
+            escaped: escapePatternOf(rule),
+            // A transparent region that also declares rules runs BOTH, declared first: the
+            // list it names gets the first turn at every position and the enclosing list gets
+            // whatever it leaves. Resolved once, here, rather than concatenated per position.
+            innerRules:
+              dynamicRules !== undefined && rule.transparent === true
+                ? [...dynamicRules, ...rules]
+                : dynamicRules,
+            runsRules,
+          })
           index = beginEnd
           matched = true
           break
@@ -546,7 +951,9 @@ export function scan<State>(
 
         // The common case: find the end in one search rather than re-testing at
         // every character, and paint the whole middle as a single span.
-        const close = findRegionEnd(rule.end, source, beginEnd)
+        const end = resolveEnd(rule, frame)
+        const close =
+          end === undefined ? undefined : findRegionEnd(end, source, beginEnd, escapePatternOf(rule))
         if (close === undefined) {
           // An unterminated region may be painted apart from a terminated one: `unclosed.scope`
           // is what lets a grammar say "this is not a string, it is a broken string", which is
@@ -658,7 +1065,7 @@ export function scan<State>(
     while (to < length) {
       const char = source.charAt(to)
       if (char === '\n' || char === '\r') break
-      if (anyRuleClaims(to, runPrevious)) break
+      if (anyRuleClaims(to, runPrevious, activeRules, open)) break
       if (/\S/.test(char)) runPrevious = unclaimed
       to += 1
     }
@@ -675,23 +1082,34 @@ export function scan<State>(
   // Innermost first, because that is the one the reader has to fix first.
   for (let frame = openRegions.length - 1; frame >= 0; frame -= 1) {
     const open = openRegions[frame]
-    if (open === undefined) continue
-    const message =
-      open.rule.unclosed?.message === undefined
-        ? `Unterminated ${open.scope}.`
-        : typeof open.rule.unclosed.message === 'function'
-          ? open.rule.unclosed.message(ruleMatch('', open.beginFrom, ['']))
-          : open.rule.unclosed.message
-    report({
-      from: open.beginFrom,
-      to: open.beginTo,
-      message,
-      severity: open.rule.unclosed?.severity ?? 'error',
-      code: open.rule.unclosed?.code ?? 'unclosed-region',
-    })
+    if (open !== undefined) reportUnclosed(open)
   }
 
-  return { tokens, diagnostics, state }
+  return { tokens, diagnostics, state, embeds }
+}
+
+/**
+ * Whether the characters immediately before an offset escape it.
+ *
+ * Escaping is counted rather than flagged, because that is what it is: `"a\\"` is a
+ * closed string as far as the reader is concerned, and only an ODD number of escape
+ * characters makes the delimiter behind them part of the text. A grammar that treated
+ * any backslash as an escape would read `"a\\"` as an unterminated string and tint the
+ * rest of the file.
+ * @param source - the document.
+ * @param index - the offset of the delimiter.
+ * @param pattern - the escape character class, if the region declared one.
+ * @returns whether the delimiter is escaped.
+ */
+function isEscaped(source: string, index: number, pattern: RegExp | undefined): boolean {
+  if (pattern === undefined || index === 0) return false
+  let count = 0
+  let at = index - 1
+  while (at >= 0 && pattern.test(source.charAt(at))) {
+    count += 1
+    at -= 1
+  }
+  return count % 2 === 1
 }
 
 /**
@@ -702,19 +1120,31 @@ export function scan<State>(
  * call: the end of a region is *searched for*, not anchored, which is the
  * difference between a string and a string that must begin exactly where the last
  * one ended.
+ *
+ * With `escapes`, a candidate preceded by an odd number of escape characters is skipped
+ * and the search continues past it, which is what makes `"a \"b\""` one string. The
+ * skip advances by one character rather than to the end of the candidate, so an escaped
+ * delimiter inside a longer one is still found.
  * @param pattern - the rule's `end` pattern.
  * @param source - the document.
  * @param from - where to start looking.
+ * @param escaped - the escape character class, when the region declared one.
  * @returns the closing range, or undefined when the region never closes.
  */
 function findRegionEnd(
   pattern: RegExp,
   source: string,
   from: number,
+  escaped?: RegExp,
 ): { from: number; to: number } | undefined {
   const probe = new RegExp(pattern.source, `${pattern.flags.replace(/[gy]/g, '')}g`)
   probe.lastIndex = from
-  const match = probe.exec(source)
-  if (match === null || match[0].length === 0) return undefined
-  return { from: match.index, to: match.index + match[0].length }
+  for (;;) {
+    const match = probe.exec(source)
+    if (match === null || match[0].length === 0) return undefined
+    if (!isEscaped(source, match.index, escaped)) {
+      return { from: match.index, to: match.index + match[0].length }
+    }
+    probe.lastIndex = match.index + 1
+  }
 }

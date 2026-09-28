@@ -49,7 +49,7 @@ import { planIndent, resolveIndentUnit, type IndentDirection } from '../core/ind
 import { resolveCommand, type KeyBinding } from '../core/keys.js'
 import { planBracketEnter, planCommentToggle, planPairTyping, type PendingEdit } from '../core/pairs.js'
 import { resolveHover } from '../core/hover.js'
-import { inspect } from '../core/inspect.js'
+import { inspect, languageAt, languageChain } from '../core/inspect.js'
 import { resolveGrammar, isResolvedGrammar, type ResolvedGrammar } from '../core/scan.js'
 import { buildStickyBlocks, type StickyBlock } from '../core/sticky.js'
 import { clamp, lineStarts, scopeAt } from '../core/text.js'
@@ -399,9 +399,6 @@ export class LiteArea<State = unknown> {
   private readonly ghost: Ghost | undefined
   /** Where the painted lines are, shared by the pinned rows and the inline preview. */
   private readonly paintReader: PaintReader
-  /** The delimiter pairs and comment markers the language declared. */
-  private readonly pairs: readonly AutoPair[]
-  private readonly comments: CommentSyntax | undefined
   /** The characters one level of indentation is, resolved once. */
   private readonly indentUnit: string
   /** The keymap: whatever the host added, then the defaults. */
@@ -504,11 +501,6 @@ export class LiteArea<State = unknown> {
     this.sticky =
       sticky === undefined || sticky.kinds.length === 0 ? undefined : { kinds: sticky.kinds }
     this.paintDecorations = options.decorations !== false
-    // Read from the DECLARED grammar rather than the resolved one: pairs and comments
-    // are passed through resolution untouched, and a host that swaps its grammar object
-    // under a live editor (which `refresh` exists for) gets the new pairs with it.
-    this.pairs = this.declaredGrammar.pairs ?? []
-    this.comments = this.declaredGrammar.comments
     this.indentUnit = resolveIndentUnit(options.indent?.unit)
     this.keys = [...(options.keys ?? []), ...DEFAULT_KEYS]
 
@@ -793,6 +785,44 @@ export class LiteArea<State = unknown> {
   showCompletions(): void {
     if (this.completion === undefined) return
     this.openCompletion('explicit')
+  }
+
+  // ── which language owns an offset ─────────────────────────────────────────
+
+  /**
+   * The declared grammar of the language that owns an offset.
+   *
+   * A composite document is several languages at once, and every keystroke-shaped decision
+   * — does this character open the completion list, does this delimiter close itself, what
+   * does `Ctrl+/` write — has to be answered by the language the reader is actually in. The
+   * inspection's language table says which one that is; outside every embedded region it is
+   * the document's own grammar.
+   *
+   * Read from the DECLARED grammar rather than the resolved one, because `pairs` and
+   * `comments` are passed through resolution untouched, and a host that swaps its grammar
+   * object under a live editor (which `refresh` exists for) gets the new ones with it.
+   * @param offset - the character offset.
+   * @returns the grammar that owns it.
+   */
+  private grammarAt(offset: number): Grammar<State> {
+    const span = this.current === undefined ? undefined : languageAt(this.current, offset)
+    return span === undefined ? this.declaredGrammar : (span.grammar.grammar as Grammar<State>)
+  }
+
+  /** The word predicate of the language at an offset. */
+  private wordCharsAt(offset: number): RegExp {
+    const span = this.current === undefined ? undefined : languageAt(this.current, offset)
+    return span === undefined ? this.grammar.wordChars : span.grammar.wordChars
+  }
+
+  /** The delimiter pairs the language at an offset declares. */
+  private pairsAt(offset: number): readonly AutoPair[] {
+    return this.grammarAt(offset).pairs ?? []
+  }
+
+  /** The comment markers the language at an offset declares. */
+  private commentsAt(offset: number): CommentSyntax | undefined {
+    return this.grammarAt(offset).comments
   }
 
   /** Close the completion list. */
@@ -1232,13 +1262,46 @@ export class LiteArea<State = unknown> {
     if (this.input.value !== before) this.handlers.onChange?.(this.input.value)
     const inspection = this.current
     if (inspection !== undefined) {
-      this.grammar.grammar.onAccept?.({
+      // The language that ANSWERED is the one told. A row an embedded grammar offered belongs
+      // to that grammar, and its own `onAccept` is where it syncs what it showed; handing every
+      // acceptance to the document's grammar would leave the embedded one's hook unreachable.
+      const answering = this.answeringLanguage(inspection, state.grammarId, this.caret())
+      answering.grammar.onAccept?.({
         text: this.input.value,
         caret: this.caret(),
         item: row,
-        state: inspection.state,
+        state: answering.state,
       })
     }
+  }
+
+  /**
+   * The language that answered a completion, with its own analysis.
+   *
+   * The lookup is by id, over the languages enclosing the caret — the id `complete` recorded
+   * on the list. It falls back to the document's own grammar, which is also the answer outside
+   * every embedded region and the answer when the caret has left the region the row came from.
+   * @param inspection - the current inspection.
+   * @param id - the id the resolved list reported, when there was one.
+   * @param offset - the offset to resolve against.
+   * @returns the grammar and its own state.
+   */
+  private answeringLanguage(
+    inspection: Inspection<State>,
+    id: string | undefined,
+    offset: number,
+  ): { grammar: Grammar<State>; state: State } {
+    if (id !== undefined) {
+      for (const span of [...languageChain(inspection, offset)].reverse()) {
+        if (span.grammar.grammar.id === id) {
+          return { grammar: span.grammar.grammar as Grammar<State>, state: span.state as State }
+        }
+      }
+      if (this.declaredGrammar.id === id) {
+        return { grammar: this.declaredGrammar, state: inspection.state }
+      }
+    }
+    return { grammar: this.declaredGrammar, state: inspection.state }
   }
 
   /** Decide what an edit does to the list. */
@@ -1265,7 +1328,9 @@ export class LiteArea<State = unknown> {
     if (data === '' || this.completion === undefined) return false
     const last = data.slice(-1)
     if (this.completion.triggerCharacters.includes(last)) return true
-    return this.grammar.wordChars.test(last)
+    // The predicate is the one belonging to the language the caret is in, so a word
+    // character of an embedded language opens the list there.
+    return this.wordCharsAt(this.caret()).test(last)
   }
 
   /** Close a list the caret has left. */
@@ -1382,21 +1447,27 @@ export class LiteArea<State = unknown> {
    * so the browser records it as one undoable edit.
    */
   private readonly onBeforeInput = (event: Event): void => {
-    if (this.pairs.length === 0 || this.input.readOnly || this.composing) return
+    if (this.input.readOnly || this.composing) return
     const input = event as InputEvent
     if (input.inputType !== 'insertText') return
     const typed = input.data
     if (typeof typed !== 'string' || typed.length !== 1) return
 
     const selection = readSelection(this.input)
+    // The pairs, the word predicate, and the scope are all the ones belonging to the
+    // language at the caret: inside a fenced code block, `"` is the embedded language's
+    // string delimiter and not the outer document's, and the outer language's pairs must
+    // not reach into it.
+    const pairs = this.pairsAt(selection.start)
+    if (pairs.length === 0) return
     const action = planPairTyping({
       text: this.input.value,
       from: selection.start,
       to: selection.end,
       typed,
-      pairs: this.pairs,
+      pairs,
       scope: this.current === undefined ? undefined : scopeAt(this.current.tokens, selection.start),
-      wordChars: this.grammar.wordChars,
+      wordChars: this.wordCharsAt(selection.start),
     })
     if (action === undefined) return
 
@@ -1441,11 +1512,12 @@ export class LiteArea<State = unknown> {
    * @returns whether a block was opened.
    */
   private enterBracket(): boolean {
-    if (this.pairs.length === 0) return false
+    const pairs = this.pairsAt(this.caret())
+    if (pairs.length === 0) return false
     const edit = planBracketEnter({
       text: this.input.value,
       caret: this.caret(),
-      pairs: this.pairs,
+      pairs,
       unit: this.indentUnit,
     })
     if (edit === undefined) return false
@@ -1564,12 +1636,17 @@ export class LiteArea<State = unknown> {
 
   /** Add or remove the language's comment markers around the selection. */
   private toggleComment(): boolean {
-    if (this.comments === undefined) return false
+    // The marker belongs to the language at the head of the selection, so `Ctrl+/` inside a
+    // fenced code block writes that language's comment and not the outer document's. A
+    // selection that spans two languages is decided by where it starts, which is the only
+    // answer that does not require the reader to understand the question.
+    const comments = this.commentsAt(this.input.selectionStart)
+    if (comments === undefined) return false
     const edit = planCommentToggle({
       text: this.input.value,
       from: this.input.selectionStart,
       to: this.input.selectionEnd,
-      syntax: this.comments,
+      syntax: comments,
     })
     if (edit === undefined) return false
     this.applyEdit(edit)

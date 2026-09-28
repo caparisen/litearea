@@ -12,8 +12,15 @@
 
 import type { Decoration, Diagnostic, Grammar, HoverContext, HoverInfo, Severity } from './types.js'
 import type { Inspection } from './inspect.js'
+import { languageChain } from './inspect.js'
 import { containsOffset, lineAt, lineStarts, tokenAt, wordInfoAt } from './text.js'
 import { isResolvedGrammar, resolveGrammar, type ResolvedGrammar } from './scan.js'
+
+/** One language that may describe an offset, with its own analysis. */
+interface DescribingLanguage {
+  resolved: ResolvedGrammar<any>
+  state: unknown
+}
 
 /** The word a severity is shown under, as VSCode titles its hovered diagnostics. */
 const SEVERITY_TITLE: Record<Severity, string> = {
@@ -46,7 +53,8 @@ export function diagnosticHover(diagnostic: Diagnostic): HoverInfo {
  * Resolve what a hover should show at an offset.
  *
  * @param inspection - the current inspection.
- * @param grammar - the language.
+ * @param grammar - the document's own language. An embedded language that owns the offset
+ *   is asked first, and this one answers only where the embedded one had nothing to say.
  * @param offset - the character offset the pointer resolved to.
  * @returns the tooltip, or undefined when there is nothing to say.
  */
@@ -60,7 +68,9 @@ export function resolveHover<State>(
 
   // ── a problem outranks a description ─────────────────────────────────────
   // The narrowest diagnostic wins when several overlap, so a squiggle inside a
-  // wider warning still explains itself rather than its container.
+  // wider warning still explains itself rather than its container. Nothing about
+  // embedding changes this: a diagnostic raised INSIDE an embedded language is a
+  // diagnostic like any other, rebased into the document it was found in.
   let covering: Diagnostic | undefined
   for (const diagnostic of diagnostics) {
     if (!containsOffset(diagnostic, offset)) continue
@@ -70,13 +80,23 @@ export function resolveHover<State>(
   }
   if (covering !== undefined) return diagnosticHover(covering)
 
+  // ── the languages that may describe this offset ──────────────────────────
+  // Innermost first, the document's own last: the language the pointer is actually in
+  // answers, and an outer language only fills a gap the inner one left — which is how a
+  // Markdown hover can explain a fenced block that the embedded language kept quiet about.
+  const languages: DescribingLanguage[] = []
+  for (const span of [...languageChain(inspection, offset)].reverse()) {
+    languages.push({ resolved: span.grammar, state: span.state })
+  }
+  languages.push({ resolved: resolved as ResolvedGrammar<any>, state })
+
   // ── a mark the grammar made, combined with its own account of the token ──
   // Both, rather than one or the other. A decoration's title is short by design ("in
   // effect: Geist Mono") and the grammar's description is rich but says nothing about
   // the mark, so a tooltip that showed only one of them would always be missing the
   // half the reader wanted.
   const decoration: Decoration | undefined = decorations.find((entry) => containsOffset(entry, offset))
-  const described = describeAt(inspection, resolved, offset)
+  const described = describeAt(inspection, languages, offset)
   if (decoration?.title !== undefined) {
     return {
       kind: 'decoration',
@@ -91,23 +111,22 @@ export function resolveHover<State>(
 }
 
 /**
- * Ask the grammar what a token is.
+ * Ask the grammars in play what a token is.
  *
  * Split out because the decoration branch above wants the same answer and must not
  * build a second context for it — one parse, one description, however many tooltips
  * are made from it.
  * @param inspection - the current inspection.
- * @param resolved - the resolved grammar.
+ * @param languages - the languages that may answer, innermost first.
  * @param offset - the offset being described.
- * @returns the description, or undefined when the grammar has none.
+ * @returns the first description any of them offers, or undefined when none does.
  */
-function describeAt<State>(
-  inspection: Inspection<State>,
-  resolved: ResolvedGrammar<State>,
+function describeAt(
+  inspection: Inspection<any>,
+  languages: readonly DescribingLanguage[],
   offset: number,
 ): HoverInfo | undefined {
-  if (resolved.grammar.describe === undefined) return undefined
-  const { text, tokens, diagnostics, state } = inspection
+  const { text, tokens, diagnostics } = inspection
   const found = tokenAt(tokens, offset)
   // Whitespace is painted like anything else, so a token IS found in blank space — and a
   // grammar handed one will describe it, which is how resting the pointer on a gap produced a
@@ -115,15 +134,23 @@ function describeAt<State>(
   // grammar is told there is no token; a grammar that wants to say something about the
   // POSITION can still do so, because `describe` is called either way.
   const token = found === undefined || found.text.trim() === '' ? undefined : found
-  const context: HoverContext<State> = {
-    text,
-    offset,
-    token,
-    word: wordInfoAt(text, offset, resolved.wordChars),
-    line: lineAt(text, offset, lineStarts(text)),
-    tokens,
-    diagnostics,
-    state,
+  for (const language of languages) {
+    const describe = language.resolved.grammar.describe
+    if (describe === undefined) continue
+    const context: HoverContext<any> = {
+      text,
+      offset,
+      token,
+      // Each language grows the word with its own predicate, so a description that talks
+      // about "the word under the pointer" means the word as that language reads it.
+      word: wordInfoAt(text, offset, language.resolved.wordChars),
+      line: lineAt(text, offset, lineStarts(text)),
+      tokens,
+      diagnostics,
+      state: language.state,
+    }
+    const info = describe(context)
+    if (info !== undefined && info !== null) return info
   }
-  return resolved.grammar.describe(context) ?? undefined
+  return undefined
 }

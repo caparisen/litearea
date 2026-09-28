@@ -143,6 +143,7 @@ export function SwatchEditor() {
 | 打字辅助 | grammar 的 `pairs` 会自己闭合、跨过自己插入的右半边、把选中内容包起来；`comments` 驱动注释切换；在一对括号之间按回车会开出一个缩进块。这些修改全部走浏览器的编辑管线，所以一次 Ctrl+Z 就能整体撤回 |
 | 自动高度 | 量的是离屏 mirror，不是活的输入框；写回高度和 overflow，并把量到的滚动条宽度发布给上色层 |
 | 一段文本一次解析 | `inspect` 一次性产出 token、诊断、装饰和分析结果，并按文本缓存；文本和分析都没变时直接跳过重绘 |
+| 复合语言 | 一个 region 可以内嵌另一门语言：它按自己的 grammar 单独解析，token 按偏移拼回，诊断各自带自己的 `source`，补全、悬浮、括号对、注释符和词边界都跟着光标进到内层 |
 | 键盘与无障碍 | `role="combobox"`、`aria-expanded`、`aria-activedescendant`、`aria-invalid`、`aria-label`，以及带真实行 id 的 listbox |
 | 体积 | 没有运行时依赖，没有 CodeMirror，没有 Monaco，引擎里没有虚拟 DOM |
 
@@ -259,6 +260,37 @@ export const formSchema = defineGrammar({
 整个语言就是这些：八条规则、两个 vocabulary、两个补全来源和一个悬浮说明。`TYPES` 走 vocabulary，所以放错位置的词会得到一条消息，而不是安静地变成普通文本；`OPTIONS` 是不拒绝任何东西的普通规则，于是排在它下面的规则仍然有机会处理自己不认识的词。
 
 完整参考 —— 每种规则的全部字段、优先级、诊断词汇，以及在同一门语言上补出 `analyze`、`checks`、`validate` 的端到端走查 —— 在 [docs/grammar.md](docs/grammar.md)。
+
+## 复合语言
+
+一个 region 可以把它的内容交给**另一门语言**。这样一门语言带来自己的规则、自己的诊断、自己的补全、自己的悬浮说明、自己的括号对和注释符，而所有跟着光标走的东西 —— 补全替换哪个词、敲哪个字符会闭合、`Ctrl+/` 写什么 —— 都跟着光标进到内层语言里：
+
+```ts
+const BY_NAME: Record<string, Grammar> = { json: jsonGrammar, js: scriptGrammar }
+
+const fence = {
+  kind: 'region',
+  scope: 'code.fence',
+  begin: /```(\w*)[^\n]{0,60}/,
+  end: /^[ \t]*```/m,
+  contentScope: 'code',
+  // 一条规则带上所有内嵌语言：info string 决定内容归谁。
+  grammar: (frame) => BY_NAME[frame.groups[1] ?? ''],
+}
+```
+
+| 做法 | 内层跑什么 |
+| --- | --- |
+| `grammar: <Grammar>` | 一整门语言：自己的规则、`analyze`、`checks`、`validate`、`compose`、`describe`、`decorate`、`wordChars`、`pairs`、`comments` |
+| `rules: [...]` | 只换规则表，分析、补全、悬浮仍归外层语言 |
+| `transparent: true` | 外层规则继续在内层生效（声明的 `rules` 先试） |
+| `end: (frame) => RegExp` | 收尾定界符由开头那个定界符决定，于是 `<div>` 由 `</div>` 收尾 |
+| `escapes: '\\'` | 被转义的收尾定界符不算收尾，`"a \"b\""` 是一个字符串 |
+| `when: { region: [...] }` / `{ notInRegion: [...] }` | 按「我在不在某个区域里」开关一条规则 |
+
+内嵌语言是当成**一份独立文档**来解析的：它的 `analyze` 只看见自己那段文本，产出的 token、诊断和装饰再按区域偏移拼回外层文档里，诊断各自带着自己的 grammar `id` 作为 `source`。`inspection.languages` 给出「哪门语言占据哪段区间」，`languageAt(inspection, offset)` / `languageChain(inspection, offset)` 回答光标落在谁的地盘里 —— 补全、悬浮、括号对、注释符和词边界都据此选择。
+
+需要注意的边界：内嵌语言看不见外层文本，外层语言也看不见 `grammar` 区域内部；一条 region 只在**一次搜索**里找它的收尾定界符，所以内层自己的嵌套是内层的事（要靠 `escapes` 保护内层出现的收尾符）。完整规则见 [docs/grammar.md](docs/grammar.md)。
 
 ## 不带任何 grammar
 
@@ -509,11 +541,12 @@ createEditor(target, {
 - **`onDiagnostics` 在编辑器挂载时会先触发一次**，哪怕文档干干净净；之后只在问题列表真的变了时才触发 —— 比较的是位置、code 和 message。等待"被告知列表已清空"的宿主因此不会永远等下去。
 - **在 React 绑定里，`sizing`、`completion`、`hover`、`sticky`、`indent`、`keys`、`decorations`、`injectStyles`、`styleNonce` 只在编辑器挂载时读取一次。** 之后再改这些只会重渲染外层容器。每次渲染都会重新读的只有 `grammar`、`value` 和 `readOnly`；其中只有 grammar 可以放心地每次渲染都重建（`refresh()` 会重新解析它，而不重建元素，这也是换语言时撤销历史能活下来的原因）。
 - **上色层只能改颜色、背景和 text-decoration。** 任何会改变字符前进量的东西 —— 换字体、改字重、字距、字体特性 —— 都会让上色从它所属的字符上滑开，而且每个字符滑开的量都不一样。
-- **每来一段新文本，`inspect` 都会完整扫一遍。** 没有增量重新词法分析，所以很大的文档每敲一个键都要付一整趟的开销。文本和分析都没变时会跳过重绘，这也是移动光标和悬浮很便宜的原因。
+- **每来一段新文本，`inspect` 都会完整扫一遍。** 没有增量重新词法分析，所以很大的文档每敲一个键都要付一整趟的开销。文本和分析都没变时会跳过重绘，这也是移动光标和悬浮很便宜的原因。内嵌语言额外付一趟自己的扫描，只扫它那段文本：四个围栏的文档就是五趟，每一趟都比它所在的那份文档短。
 - **悬浮需要一个光标命中测试。** 它会问 `caretPositionFromPoint`/`caretRangeFromPoint` 指针落在哪个偏移上，`hasCaretHitTest()` 会告诉你环境里有没有。没有的话，提示就永远不会出现。
 - **这不是一个完整编辑器。** 没有行号、没有搜索、没有多光标、没有括号匹配、没有折叠、没有 snippet，也没有撤销按钮 —— 浏览器的历史记录就是撤销栈，`editor.undo()` 和 `editor.redo()` 只是它上面很薄的一层，而且只能报告"这次调用是否可能"，无法报告"是否真的撤销了什么"。
 - **悬浮提示和文档面板都是纯文本。** 不渲染 markdown，也不渲染 HTML：写成 `<b>` 的文字会把这几个字符原样送到读者眼前，而不是渲染成粗体。
 - **没有 `'commit'` 这个补全触发类型。** 提交字符会接受当前行、写入那个字符并关掉列表；之后再敲什么都是普通的 `'auto'`。`CompletionTrigger` 只有 `'auto' | 'explicit'`。
+- **`grammar` 区域对外层语言是不透明的。** 内层语言只看得见自己那段文本，外层语言也看不见它内部；这条 region 的收尾定界符只搜一次，所以内层自己的嵌套由内层负责，内层文本里出现的收尾定界符要靠 `escapes` 保护。`indent.unit` 和 `sticky.kinds` 仍然是编辑器级选项，不随内层语言变化。
 
 ## 许可证
 

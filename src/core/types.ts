@@ -24,6 +24,15 @@
 //
 // Every hook is optional. A grammar with nothing but `rules` is a plain
 // highlighter; add `compose` and it completes; add `diagnose` and it complains.
+//
+// A grammar may also EMBED other grammars. A region that declares `grammar` hands its
+// content to a language of its own, which brings its own rules and its own hooks with
+// it; `Inspection.languages` says which language owns which offsets, and every
+// caret-shaped feature — completion, hover, word characters, pairs, comments — follows
+// the caret into the embedded language. That is the whole of what "composite language"
+// means here, and it is one field on one rule rather than a second engine.
+
+import type { ResolvedGrammar } from './scan.js'
 
 /** A half-open range of character offsets into the document. `to` is exclusive. */
 export interface Range {
@@ -174,10 +183,16 @@ export interface ResolvedVocabulary<State = unknown> {
 /**
  * Where a rule is allowed to match. Every predicate that is present must hold.
  *
- * The predicates are about *position*, not about the parse. That boundary is
- * deliberate: a rule that could ask "am I inside a rule named running?" would
- * make the highlighter a parser, and the whole point of `analyze` is that the
- * parse happens once, in a function the grammar author can read and test.
+ * The predicates are about *position* — where the match sits in the document and what
+ * lies immediately around it. They are deliberately not about the parse: a rule cannot
+ * ask "did my own language decide this is a function body?", and the whole point of
+ * `analyze` is that the parse happens once, in a function the grammar author can read
+ * and test.
+ *
+ * `region` and `notInRegion` are the one exception that proves the rule. A region is
+ * not a parse: it is the lexer's own delimiter machinery, a fact the scanner already
+ * holds in a stack, and a composite language cannot be written without it — this is
+ * how the outside language stays out of the inside one.
  */
 export interface RuleContext {
   /** Only when nothing but whitespace precedes it on its line. */
@@ -186,6 +201,24 @@ export interface RuleContext {
   after?: readonly Scope[]
   /** Only when the nearest preceding token does NOT have one of these scopes. */
   notAfter?: readonly Scope[]
+  /**
+   * Only when some open region's content scope is one of these.
+   *
+   * The name tested is the one {@link Token.region} carries: a region's
+   * `contentScope`, which is its `scope` unless the rule said otherwise. Every
+   * enclosing region counts rather than only the innermost, so a rule can ask "am I
+   * inside a code region at all" however deeply the document nests.
+   *
+   * This is how one language is switched off inside another. An emphasis rule that
+   * must not fire inside a fenced block reads:
+   *
+   * ```ts
+   * { kind: 'match', scope: 'emphasis', pattern: /[*_][^_*]+[*_]/, when: { notInRegion: ['code.fence'] } }
+   * ```
+   */
+  region?: readonly Scope[]
+  /** Only when NO open region's content scope is one of these. */
+  notInRegion?: readonly Scope[]
   /** Only when the whole line matches. Anchored at the start. */
   line?: RegExp
   /** Only when the caret-facing column is at least this many characters in. */
@@ -217,6 +250,37 @@ export interface RuleMatch<State = unknown> {
   groups: readonly (string | undefined)[]
   /** Whatever `Grammar.analyze` returned. */
   state: State
+  /**
+   * The content scope of the innermost open region, when the match is inside one.
+   *
+   * The same value {@link Token.region} gets, and the same one `when.region` tests. Like
+   * every field below it, it is ABSENT — not empty — when no region encloses the match, so a
+   * scope function can tell the top level from a region whose content scope is an empty
+   * string.
+   */
+  region?: Scope
+  /** Every enclosing region's content scope, outermost first. Absent at the top level. */
+  regions?: readonly Scope[]
+  /** How many regions enclose the match: `1` for the outermost. Absent at the top level. */
+  depth?: number
+  /**
+   * The id of the grammar whose rule list is running, inside a region.
+   *
+   * Because an embedded language is scanned as a document of its own, this is always the id of
+   * the grammar that was handed the text being scanned — which is what lets one scope function
+   * or one rule list serve several languages and still name its own.
+   */
+  grammarId?: string
+  /**
+   * The capture groups of the innermost region's `begin`, for a match inside one.
+   *
+   * This is how a rule knows WHICH embedded language it is in when a single region rule
+   * declares several: a fence whose `begin` captures the info string hands it to every rule
+   * running inside it.
+   */
+  beginGroups?: readonly (string | undefined)[]
+  /** The text of the innermost region's opening delimiter. */
+  beginText?: string
 }
 
 /** A regular-expression token: the workhorse. */
@@ -281,14 +345,73 @@ export interface WordsRule<State = unknown> {
 }
 
 /**
- * A delimited region: a block comment, a multi-line string, a heredoc.
+ * A region the scanner has OPENED, seen from inside it.
  *
- * The engine scans for `end` from the end of `begin` and never re-enters the rule list in
- * between (unless `transparent`), so the contents of a string cannot be mistaken for the
- * language around it. `nested` widens that by one delimiter — the region may open inside
- * itself — and no further. An `end` that never arrives runs the region to the end of the
- * document and raises `unclosed`, because an unterminated block comment is a mistake and not
- * an invitation to tint the rest of the file.
+ * It is what a dynamic `end` is handed, so a closing delimiter can be decided by the
+ * one that opened the region — `<div>` closes at `</div>` — which is the difference
+ * between a highlighter that can read markup and one that can only tint it.
+ */
+export interface RegionFrame {
+  /** The rule that opened the region. */
+  rule: RegionRule<any>
+  /**
+   * The content scope of the region, which is also what `Token.region` and
+   * `when.region` report for everything inside it.
+   */
+  scope: Scope
+  /** Where the opening delimiter begins. */
+  from: number
+  /** Where the content begins: the offset after the opening delimiter. */
+  contentFrom: number
+  /** The opening delimiter's text. */
+  open: string
+  /** The capture groups of `begin`. Index 0 is the whole match. */
+  groups: readonly (string | undefined)[]
+  /** The document. */
+  text: string
+  /** Nesting depth: `1` for the outermost region. */
+  depth: number
+  /** The id of the grammar that owns the rule. */
+  grammarId: string
+  /** The frame this one opened inside, when it opened inside another. */
+  parent: RegionFrame | undefined
+}
+
+/**
+ * How a region ends: a pattern, or a function of the frame that opened it.
+ *
+ * The function form is what makes markup possible. `begin: /<([a-zA-Z][\w-]*)\b[^>]*>/`
+ * with `end: (frame) => new RegExp(`</${frame.groups[1]}>`)` pairs every tag with its
+ * own name, so `<div><span></span></div>` nests correctly — something a fixed pattern
+ * cannot express, because a pattern cannot read the match that opened the region.
+ *
+ * The function is called once, when the region opens, and its result is used for the
+ * rest of the region's life. Returning `undefined` means the region never closes: it
+ * runs to the end of the document and reports `unclosed`, which is what an opening
+ * delimiter that cannot name its own closer deserves.
+ */
+export type RegionEnd = RegExp | ((frame: RegionFrame) => RegExp | undefined)
+
+/**
+ * A delimited region: a block comment, a multi-line string, a heredoc, or a whole
+ * embedded language.
+ *
+ * The engine scans for `end` from the end of `begin`. By default it never re-enters a
+ * rule list in between, so the contents of a string cannot be mistaken for the
+ * language around it. Four fields change that, and they are the composite-language
+ * half of the grammar:
+ *
+ * | Field | What runs inside |
+ * | --- | --- |
+ * | neither flag | nothing: the content is one opaque span, found in one search |
+ * | `nested: true` | the region's own delimiters, so the delimiters pair off |
+ * | `transparent: true` | the grammar's own rules, plus `rules` if it declared any |
+ * | `rules: [...]` | exactly that rule list, and nothing of the outer language |
+ * | `grammar: {...}` | a whole embedded language: its own rules, analysis, checks, completion, hover, pairs, and comments |
+ *
+ * An `end` that never arrives runs the region to the end of the document and raises
+ * `unclosed`, because an unterminated block comment is a mistake and not an invitation
+ * to tint the rest of the file.
  */
 export interface RegionRule<State = unknown> {
   kind: 'region'
@@ -296,8 +419,15 @@ export interface RegionRule<State = unknown> {
   scope?: ScopeSpec<State>
   /** The opening delimiter. */
   begin: RegExp
-  /** The closing delimiter, searched for rather than anchored. */
-  end: RegExp
+  /**
+   * The closing delimiter.
+   *
+   * A plain region **searches** for it from the end of `begin` in one pass; a nested,
+   * transparent, or rule-carrying one tries it at each position, with the same first
+   * match. A function is called once when the region opens and may read that frame's
+   * `groups`, which is how a tag is closed by its own name.
+   */
+  end: RegionEnd
   /** The scope of the opening delimiter. Defaults to `scope`. */
   openScope?: ScopeSpec<State>
   /** The scope of the closing delimiter. Defaults to `scope`. */
@@ -310,17 +440,78 @@ export interface RegionRule<State = unknown> {
    * Nesting and transparency are different things, and conflating them is how a block
    * comment stops being a comment: a language whose comments nest wants the delimiters
    * matched and everything else inside treated as prose. So this flag adds ONLY the
-   * delimiter — the contents stay opaque unless `transparent` says otherwise.
+   * delimiter — the contents stay opaque unless something else says otherwise.
+   *
+   * It is implied by `transparent` and by `rules`, because each of those exposes a rule
+   * list that may contain the rule that opened the region. A `grammar` region is the
+   * exception: the outer language never re-enters it, because the embedded language owns
+   * its content whole — an embedded language that nests is the embedded language's own
+   * business.
    */
   nested?: boolean
   /**
-   * Whether the grammar's other rules also apply inside this region. Default `false`.
+   * Whether the grammar's own rules ALSO apply inside this region. Default `false`.
    *
-   * The flag for a region that is not prose: a template in another language, or a string
-   * with escapes to colour. It implies nesting, because the rule list this exposes includes
-   * the rule that opened the region.
+   * The flag for a region that is not prose: a template in another language, or a
+   * string with escapes worth colouring. Combined with `rules`, the declared rules are
+   * tried first and the outer list gets whatever they leave.
    */
   transparent?: boolean
+  /**
+   * A rule list that runs inside this region instead of the outer one.
+   *
+   * This is the lightweight half of a composite language: the region swaps the rules
+   * without bringing an analysis, a completion source, or a hover with it. Use
+   * `grammar` when the embedded language needs any of those.
+   *
+   * A function is handed the frame the region opened, so one rule can serve several
+   * shapes of region and decide from its own capture groups.
+   */
+  rules?:
+    | readonly Rule<State>[]
+    | ((frame: RegionFrame) => readonly Rule<State>[] | undefined)
+  /**
+   * A whole embedded language, painted by its own rules and read by its own hooks.
+   *
+   * The region is opaque to the outer rule list; the nested grammar is inspected over
+   * the region's content alone, and its tokens, diagnostics, and decorations are
+   * spliced into the outer document at the region's offsets. Its `analyze`, `checks`,
+   * `validate`, `compose`, `describe`, `decorate`, `onAccept`, `wordChars`, `pairs`,
+   * and `comments` all apply to what lies inside the region, so completion, hover,
+   * auto-closing, and `Ctrl+/` follow the language the caret is actually in.
+   *
+   * A function is handed the frame the region opened — the same object a dynamic `end`
+   * gets — which is how ONE fence rule carries every embedded language at once:
+   *
+   * ```ts
+   * const BY_NAME: Record<string, Grammar> = { json: jsonGrammar, js: scriptGrammar }
+   * const fence: RegionRule = {
+   *   kind: 'region',
+   *   scope: 'code.fence',
+   *   begin: /```(\w*)[^\n]{0,40}/,
+   *   end: /^[ \t]*```/m,
+   *   grammar: (frame) => BY_NAME[frame.groups[1] ?? ''] ?? undefined,
+   * }
+   * ```
+   *
+   * Returning `undefined` from the function leaves the region to the lexer: it is then
+   * an ordinary opaque region, painted with `contentScope` and nothing more. That is the
+   * answer for a fence whose info string names a language the document does not know.
+   */
+  grammar?: Grammar<any> | ((frame: RegionFrame) => Grammar<any> | undefined)
+  /**
+   * The characters that escape the closing delimiter, as a set of characters.
+   *
+   * `escapes: '\\'` is what makes `"a \"b\""` one string rather than three tokens: a
+   * closing delimiter preceded by an odd number of escape characters is not a close.
+   * Without it a region ends at the first `end` match, which is correct for a heredoc
+   * and wrong for every language that has string escapes.
+   *
+   * Each character of the string is one escape character, and every one of them is
+   * escaped for the character class the engine builds — so a set may contain `]`, `-`, or
+   * `^` without changing what it means.
+   */
+  escapes?: string
   when?: RuleContext
   /** What an unterminated region reports. */
   unclosed?: {
@@ -559,6 +750,16 @@ export interface Completion {
   needle: string
   /** The source that produced them, for tests and for the host. */
   sourceId: string
+  /**
+   * The `id` of the grammar the source belongs to.
+   *
+   * In a composite document a row may come from an embedded language, and the editor needs to
+   * know which one when the row is accepted: a grammar's `onAccept` is that grammar's hook,
+   * and a host that syncs its own state would otherwise never hear about a row that an
+   * embedded language offered. It is the document's own grammar's id when the caret is not
+   * inside an embedded region.
+   */
+  grammarId: string
 }
 
 // ── hover ───────────────────────────────────────────────────────────────────
@@ -664,6 +865,10 @@ export interface Grammar<State = unknown> {
    * replaces, what a diagnostic underlines, and where a double-click puts the
    * selection. A language whose names contain dots or hyphens must say so, or
    * every completion will replace one segment of a name instead of the name.
+   *
+   * In a composite document the predicate follows the caret: the editor asks the
+   * innermost embedded language at the offset, so a word inside an embedded region is
+   * that language's word.
    */
   wordChars?: RegExp
 
@@ -676,10 +881,19 @@ export interface Grammar<State = unknown> {
    * Declared rather than inferred, because only the language knows that a paren inside
    * a comment is prose and a paren inside an expression is a bracket. A pair may name
    * the scopes it must not close itself in — a string, typically.
+   *
+   * In a composite document the pairs follow the caret: an embedded language may
+   * declare its own, and the keystroke is answered by the innermost language at the
+   * offset.
    */
   pairs?: readonly AutoPair[]
 
-  /** How the language comments out a line, or a run of them, for the comment toggle. */
+  /**
+   * How the language comments out a line, or a run of them, for the comment toggle.
+   *
+   * In a composite document the markers follow the caret, so `Ctrl+/` inside an
+   * embedded region uses the embedded language's comment syntax.
+   */
   comments?: CommentSyntax
 
   /**
@@ -721,4 +935,70 @@ export interface Grammar<State = unknown> {
    * sync a host's own state — a stored value, a preview — without re-parsing.
    */
   onAccept?: (result: { text: string; caret: number; item: SuggestionItem; state: State }) => void
+}
+
+// ── embedded languages ──────────────────────────────────────────────────────
+
+/**
+ * One embedded language's territory in the document.
+ *
+ * A region that declares `grammar` produces one of these per instance, and every span
+ * discovered inside it produces another, so a document that embeds a language which
+ * embeds a language is described completely. `Inspection.languages` carries them sorted
+ * by position, and `languageAt`/`languageChain` read them.
+ *
+ * The span is the answer to "which language owns this offset?", which is what every
+ * caret-shaped feature needs: which `wordChars` grow the word a completion replaces,
+ * which `pairs` close a bracket, which `comments` a `Ctrl+/` writes, which `compose`
+ * sources are eligible, and whose `describe` answers a hover.
+ */
+export interface LanguageSpan extends Range {
+  /** The embedded grammar's `id`. */
+  id: string
+  /** The embedded grammar's human name, when it declared one. */
+  name?: string
+  /**
+   * How many embedded languages enclose this one. `1` for a language embedded directly
+   * in the document's own.
+   */
+  depth: number
+  /** The content scope of the region that opened this territory. */
+  scope: Scope
+  /** The capture groups of the region's `begin`, for a fence that names its language. */
+  groups: readonly (string | undefined)[]
+  /** The opening delimiter's text. */
+  open: string
+  /** The embedded grammar, resolved, so a caller can read its `wordChars` and rules. */
+  grammar: ResolvedGrammar<any>
+  /** What the embedded grammar's `analyze` returned for the region's content. */
+  state: unknown
+}
+
+/**
+ * One region the scanner found that an embedded grammar owns.
+ *
+ * Produced by `scan` and consumed by `inspect`, which runs the nested grammar over the
+ * region's content and splices the result in. Exposed because a host that only wants the
+ * lexical pass should still be able to see where the embedded languages are, and because
+ * it is the seam the two halves of the feature meet at.
+ */
+export interface RegionEmbed {
+  /** The rule that declared the embedded grammar. */
+  rule: RegionRule<any>
+  /** The embedded grammar, as declared. */
+  grammar: Grammar<any>
+  /** The whole region, opening delimiter included. */
+  from: number
+  to: number
+  /** The content, between the delimiters. This is what the nested grammar reads. */
+  contentFrom: number
+  contentTo: number
+  /** The content scope of the region. */
+  scope: Scope
+  /** The capture groups of `begin`. */
+  groups: readonly (string | undefined)[]
+  /** The opening delimiter's text. */
+  open: string
+  /** How many regions enclose this one. */
+  depth: number
 }

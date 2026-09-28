@@ -49,6 +49,8 @@ const CORE_EXPORTS = [
   'isResolvedGrammar',
   'scan',
   'inspect',
+  'languageAt',
+  'languageChain',
   'complete',
   'applyCompletion',
   'resolveHover',
@@ -225,6 +227,54 @@ assert.equal(
   segments.map((segment) => segment.text).join(''),
   inspection.text,
   'the built segmenter did not cover the document exactly',
+)
+
+// ── an embedded language, from the built artifact ──────────────────────────
+//
+// The composite half of the engine is the part of the built surface that a host reaches for
+// without a test of its own: a region that names a grammar, the paint that replaces the
+// region's content, and the language table a caret resolves against. All three are asserted
+// here, from `dist/`, because a build that dropped the nested pass would still tokenize,
+// diagnose, complete, and segment the single-language fixture above.
+
+/** The embedded language: one word scope, so its tokens are unmistakable. */
+const innerFixture = core.defineGrammar({
+  id: 'verify-inner',
+  rules: [{ kind: 'match', scope: 'inner.word', pattern: /[a-z]+/ }],
+})
+
+/** A document whose middle is the embedded language's. */
+const outerFixture = core.defineGrammar({
+  id: 'verify-outer',
+  rules: [
+    {
+      kind: 'region',
+      scope: 'code',
+      begin: /\[\[/,
+      end: /\]\]/,
+      contentScope: 'code.inner',
+      grammar: innerFixture,
+    },
+    { kind: 'match', scope: 'outer.word', pattern: /[a-z]+/ },
+  ],
+})
+
+const nested = core.inspect('alpha [[beta]] gamma', outerFixture)
+assert.equal(nested.languages.length, 1, 'the built engine recorded no embedded language')
+assert.equal(nested.languages[0]?.id, 'verify-inner', 'the built engine recorded the wrong language')
+assert.ok(
+  nested.tokens.some((token) => token.scope === 'inner.word' && token.text === 'beta'),
+  'the built engine did not paint the embedded region with the embedded grammar',
+)
+assert.equal(
+  core.languageAt(nested, 'alpha [[beta]] gamma'.indexOf('beta'))?.id,
+  'verify-inner',
+  'the built engine could not say which language owns an offset',
+)
+assert.equal(
+  core.languageChain(nested, 'alpha [[beta]] gamma'.indexOf('beta')).length,
+  1,
+  'the built engine could not list the languages enclosing an offset',
 )
 
 // ── the package metadata points at real files ──────────────────────────────
