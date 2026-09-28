@@ -1,25 +1,16 @@
 // ─── every live thing on the page ───────────────────────────────────────────
 //
-// A page declares a live editor by id — `::: live swatch` in the prose, or `specimen: { id }` in
-// the page record — and this is the one place that says what an id means. Adding an example is a
-// grammar file, a factory in `examples.ts` (or a preset in the playground), and a line here.
+// A page declares a live editor by id — `specimen: { id: 'swatch' }` in the page record — and this
+// is the one place that says what an id means. There are two of them left, because the playground
+// is not a frame: it is the page it is on, and `mountPlayground` builds it.
 //
 // A frame that will not mount says so where it stands rather than disappearing. That matters more
-// than it sounds: the failure this catches is a mistyped id in a page's prose, and a page with a
+// than it sounds: the failure this catches is a mistyped id in a page's record, and a page with a
 // silently empty well in it is the kind of thing that ships.
 
-import {
-  completionExample,
-  formSchemaExample,
-  miniConfExample,
-  overviewExample,
-  stickyExample,
-  swatchExample,
-  themedExample,
-  typingAidsExample,
-} from './examples.js'
+import { swatchExample, themedExample } from './examples.js'
 import { hostFor, type LiveHost } from './kit.js'
-import { mountBench } from '../playground.js'
+import { mountPlayground } from '../playground.js'
 
 /** What the registry holds: something that mounts an editor into a well. */
 type Factory = (host: LiveHost) => void
@@ -27,13 +18,7 @@ type Factory = (host: LiveHost) => void
 /** The id a page writes, and what it mounts. */
 const EXAMPLES: Readonly<Record<string, Factory>> = {
   swatch: (host) => swatchExample(host),
-  'swatch-overview': (host) => overviewExample(host),
   'swatch-themed': (host) => themedExample(host),
-  'form-schema': (host) => formSchemaExample(host),
-  'mini-conf': (host) => miniConfExample(host),
-  sticky: (host) => stickyExample(host),
-  'typing-aids': (host) => typingAidsExample(host),
-  completion: (host) => completionExample(host),
 }
 
 /** Say what went wrong, in the well. */
@@ -52,7 +37,7 @@ function report(frame: HTMLElement, error: unknown): void {
 }
 
 /**
- * Mount every live frame on the page.
+ * Mount every live frame on the page, and the playground if this is its page.
  *
  * The count is written onto `<body>` as a data attribute, which is not for a reader: it is what
  * makes "every well on this page has an editor in it" a thing that can be checked from outside
@@ -84,5 +69,5 @@ export function mountLiveFrames(): void {
     document.querySelector('.masthead')?.after(summary)
   }
 
-  mountBench()
+  mountPlayground()
 }

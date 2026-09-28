@@ -1,43 +1,40 @@
-// ─── the playground: two editors and one instrument ─────────────────────────
+// ─── the playground: one file, and what it does ─────────────────────────────
 //
-// Three panes. The left one is a document in some language. The right one is the LANGUAGE, as
-// source, and it is a litearea editor too — painted by the grammar in `dsl.ts`, which is a
-// litearea grammar written for litearea grammars. Under them, what the engine says about the
-// document right now: the tokens, the problems, the decorations, the completion rows, and the
-// analysis `analyze` returned.
+// Three things on one page. A list at the top picks an example; the left editor is that example's
+// WHOLE file, editable; the right one is a document read with whatever the left one currently says.
 //
-// The grammar is applied by EVALUATING its source with `new Function`, which is why the presets
-// in `presets.ts` carry no imports. That is a decision rather than a shortcut: a playground that
-// could only switch between three fixed languages would not be a playground. A source that does
-// not evaluate is reported in place and the last working language stays in force, because a
-// syntax error is the most likely thing to happen here and it must not take the page with it.
+// There is no apply button, and there is no "try this" list beside the code. The grammar is
+// re-evaluated a moment after the reader stops typing, so an edit and its effect are the same
+// gesture — and what used to be a list of things to try is a comment in the file, which is where a
+// reader who is about to try something is already looking.
 //
-// The document editor is handed a LIVE VIEW of the grammar rather than the grammar itself — the
-// same trick the React binding uses — so a new language is picked up by `refresh()` without the
-// editor being rebuilt, and the reader's undo history survives applying one.
+// Two decisions are worth knowing about:
+//
+//   - The document editor is handed a LIVE VIEW of the grammar rather than the grammar itself —
+//     the same trick the React binding uses — so a new language is picked up by `refresh()` without
+//     the editor being rebuilt, and the reader's undo history survives an edit to the source.
+//   - The preview is remounted only when the OPTIONS change. `completion`, `sticky`, and the key
+//     bindings are read when an editor mounts, so a file that edits one needs a new editor; a file
+//     that edits a rule does not, and remounting on every keystroke would throw away the caret and
+//     the undo stack of the document beside it.
+//
+// A source that does not run is the most likely thing to happen here, and it must not take the page
+// with it: the last language that ran stays in force, and the file that failed is marked.
 
-import {
-  createEditor,
-  defineGrammar,
-  defineVocabulary,
-  inspect,
-  type Completion,
-  type Grammar,
-  type LiteArea,
-} from '@citisen/litearea'
+import * as litearea from '@citisen/litearea'
+import { createEditor, type Grammar, type LiteArea } from '@citisen/litearea'
 import { dslGrammar } from './dsl.js'
-import { escapeHtml, plural } from './live/kit.js'
-import { PRESETS, type Preset } from './presets.js'
+import { EXAMPLES, type Example } from './examples/index.js'
+import { run, type ExampleModule } from './examples/run.js'
 
-/** What the bench keeps between keystrokes. */
+/** What the page keeps between keystrokes. */
 interface Bench {
-  /** The grammar in force, behind the live view the document editor holds. */
+  /** The language in force, behind the live view the document editor holds. */
   holder: { current: Grammar }
-  doc: LiteArea
+  /** The options the preview was mounted with, serialized: they are read at mount. */
+  mounted: string
   source: LiteArea
-  read: HTMLElement
-  error: HTMLElement
-  counts: HTMLElement
+  preview: LiteArea | undefined
 }
 
 /** One element, with a class and text, in one call. */
@@ -67,132 +64,13 @@ function liveGrammar(holder: { current: Grammar }): Grammar {
 }
 
 /**
- * Evaluate a grammar's source.
- *
- * The two definitions are handed in as PARAMETERS rather than left in scope, so a source has no
- * way to reach anything else on the page. That is as close as a browser gets to sandboxing an
- * `eval`, and it is why a preset is written as one expression rather than as a module.
- *
- * @param source - the source, as an expression that returns a grammar.
- * @returns the grammar it produced.
- */
-function evaluate(source: string): Grammar {
-  const factory = new Function('defineGrammar', 'defineVocabulary', `"use strict"; return (${source})`)
-  return factory(defineGrammar, defineVocabulary) as Grammar
-}
-
-/** One row of the readout: a fixed-width tag and the value beside it. */
-function row(tag: string, value: string, className = ''): string {
-  const shown = value.length > 110 ? `${value.slice(0, 110)}…` : value
-  return `<span class="tag">${escapeHtml(tag)}</span><span class="value ${className}">${escapeHtml(shown)}</span>`
-}
-
-/** One section of the readout: a heading, then the rows, or a sentence saying there are none. */
-function section(title: string, rows: readonly string[], empty: string, total?: number): HTMLElement {
-  const box = element('div')
-  const heading = element('h4', undefined, title)
-  if (total !== undefined && total > rows.length) heading.textContent = `${title} (${String(rows.length)} of ${String(total)})`
-  box.append(heading)
-  if (rows.length === 0) {
-    box.append(element('p', 'empty', empty))
-    return box
-  }
-  const list = element('ol')
-  for (const html of rows) {
-    const item = element('li')
-    // The rows are built rather than parsed: `row` escapes both halves, so a document that
-    // contains markup is shown as markup.
-    item.innerHTML = html
-    list.append(item)
-  }
-  box.append(list)
-  return box
-}
-
-/**
- * Read the document through the engine itself.
- *
- * The bench does not ask the editor what it thinks. It calls `inspect` on the same text with the
- * same grammar and shows what comes back — which is the same call the editor makes, and the
- * point of the instrument: it shows the engine rather than a second opinion about it.
- *
- * @param bench - the bench.
- * @param completion - the list the editor last reported, if any.
- */
-function render(bench: Bench, completion?: Completion): void {
-  let inspection: ReturnType<typeof inspect>
-  try {
-    inspection = inspect(bench.doc.value, bench.holder.current)
-  } catch (error) {
-    bench.read.replaceChildren(section('the engine refused this document', [row('error', String(error))], 'none'))
-    return
-  }
-
-  const tokens = inspection.tokens
-    .filter((token) => token.text.trim() !== '')
-    .map((token) => row(token.scope, token.text.replace(/\n/g, '⏎')))
-
-  const problems = inspection.diagnostics.map((diagnostic) =>
-    row(diagnostic.code ?? 'problem', diagnostic.message, `severity-${diagnostic.severity}`),
-  )
-
-  const marks = inspection.decorations.map((decoration) =>
-    row(decoration.kind, inspection.text.slice(decoration.from, decoration.to).replace(/\n/g, '⏎')),
-  )
-
-  const rows = (completion?.rows ?? [])
-    .slice(0, 8)
-    .map((entry) =>
-      row(entry.item.kind ?? 'row', entry.item.detail === undefined ? entry.item.label : `${entry.item.label} — ${entry.item.detail}`),
-    )
-
-  const state = inspection.state === undefined ? [] : [row('state', JSON.stringify(inspection.state) ?? 'undefined')]
-
-  // The readout is a column of rows beside the prose and it is meant to be read at a glance, so it
-  // shows the first of them and says how many it left out. Forty tokens is more than a screen of
-  // its own, and the count in the bar already carries the total.
-  bench.counts.textContent = `${plural(tokens.length, 'token')} · ${plural(problems.length, 'problem')} · ${plural(marks.length, 'decoration')}`
-  bench.read.replaceChildren(
-    section('tokens', tokens.slice(0, 30), 'the document is empty', tokens.length),
-    section('problems', problems, 'none'),
-    section('decorations', marks, 'none'),
-    section('completion rows', rows, completion === undefined ? 'the list is closed' : 'nothing matches'),
-    section('analysis', state, 'the grammar has no analyze'),
-  )
-}
-
-/** Say why a grammar would not apply, in the pane it came from. */
-function fail(bench: Bench, error: unknown): void {
-  bench.error.hidden = false
-  bench.error.textContent = error instanceof Error ? error.message : String(error)
-}
-
-/** One pane: a bar with a title and its controls, and a well under it. */
-function pane(title: string, controls: readonly HTMLElement[]): { pane: HTMLElement; body: HTMLElement } {
-  const box = element('div', 'bench-pane')
-  const bar = element('p', 'bench-bar')
-  bar.append(element('strong', undefined, title))
-  const group = element('span', 'bench-controls')
-  group.append(...controls)
-  bar.append(group)
-  const body = element('div')
-  box.append(bar, body)
-  return { pane: box, body }
-}
-
-/**
  * How much room the bench may take.
  *
- * The bench is the page, so it is sized to what is left of the window under the masthead — but a
- * page is prose above it as well as an instrument, and that prose is not a constant: a title wraps
- * on one screen and not on another, and a web font arriving late moves every line of it. So the
- * space above the bench is MEASURED rather than assumed, and published as `--bench-lead` for the
+ * The bench is the page, so it is sized to what is left of the window under the masthead — but the
+ * page has a title and a sentence above it as well, and that is not a constant: a title wraps on
+ * one screen and not on another, and a web font arriving late moves every line of it. So the space
+ * above the bench is MEASURED rather than assumed, and published as `--bench-lead` for the
  * stylesheet to subtract.
- *
- * It is `offsetTop` that is read, which is the one number here that is already a layout result.
- * Measuring the boxes above the bench instead would depend on when this runs, and the bench is
- * built before the fonts are; the observer then fires whenever that column changes height, which
- * is the only thing that can make the answer stale.
  *
  * @param host - the bench element.
  */
@@ -210,123 +88,125 @@ function watchLead(host: HTMLElement): void {
   }
 }
 
-/** Build the bench and mount both editors. */
+/** Build the bench, mount both editors, and load the first example. */
 function build(host: HTMLElement): void {
-  const first = PRESETS[0]
+  const first = EXAMPLES[0]
   if (first === undefined) return
 
-  let preset: Preset = first
-  let grammar: Grammar
-  try {
-    grammar = evaluate(first.source)
-  } catch (error) {
-    // A preset is the site's own, generated from this repository, so a failure here is a mistake
-    // in the site and not in the reader's input — and the page still may not go down with it. An
-    // empty grammar paints plain text, which is a bench with nothing in it rather than no bench.
-    grammar = { id: 'empty', rules: [] }
-    console.error('playground: the shipped preset does not evaluate', error)
-  }
+  const sourceHost = element('div', 'bench-pane')
+  const previewHost = element('div', 'bench-pane')
+  sourceHost.dataset.pane = 'source'
+  previewHost.dataset.pane = 'preview'
 
-  const bench: Bench = {
-    holder: { current: grammar },
-    doc: undefined as unknown as LiteArea,
-    source: undefined as unknown as LiteArea,
-    read: element('div', 'bench-read'),
-    error: element('p', 'bench-error'),
-    counts: element('span'),
-  }
-  bench.error.hidden = true
-
-  // ── the controls ──────────────────────────────────────────────────────────
+  const bar = element('div', 'bench-bar')
   const select = element('select')
-  select.setAttribute('aria-label', 'Preset language')
-  for (const candidate of PRESETS) {
-    const option = element('option', undefined, candidate.name)
-    option.value = candidate.id
+  select.setAttribute('aria-label', 'Example')
+  for (const example of EXAMPLES) {
+    const option = element('option', undefined, example.name)
+    option.value = example.id
     select.append(option)
   }
-  const apply = element('button', undefined, 'apply')
-  apply.type = 'button'
-  const reset = element('button', undefined, 'reset document')
-  reset.type = 'button'
+  // The one mark the page has. A source that does not run leaves the last one that did in force,
+  // and this says so without spending a line of prose on it: the square carries the message in its
+  // tooltip, where a reader who wants it can find it and a reader who does not is not told.
+  const mark = element('span', 'bench-mark')
+  mark.hidden = true
+  bar.append(select, mark)
 
-  // ── the panes ─────────────────────────────────────────────────────────────
-  const sourcePane = pane('the grammar', [select, apply])
-  const docPane = pane('the document', [reset])
-  const readPane = pane('the engine says', [bench.counts])
-
-  sourcePane.pane.append(bench.error)
-  readPane.body.append(bench.read)
-  // The three panes are the host's children, and the readout is the one that may be laid out
-  // below them on a narrow screen: the grid asks for `data-read` by name.
-  readPane.pane.dataset.read = ''
-  host.append(docPane.pane, sourcePane.pane, readPane.pane)
+  const split = element('div', 'bench-split')
+  split.append(sourceHost, previewHost)
+  host.append(bar, split)
   watchLead(host)
 
-  // The grammar editor first: it is the language, and the document editor below is built with a
-  // view of whatever it currently says.
-  bench.source = createEditor(sourcePane.body, {
-    grammar: dslGrammar,
-    value: first.source,
-    // The grammar is the pane that scrolls: it is a whole module, and the readout under it is the
-    // instrument the reader came for.
-    sizing: { minHeight: 260, maxHeight: 340 },
-    indent: { unit: 2 },
-    ariaLabel: 'The grammar source',
-  })
-
-  bench.doc = createEditor(docPane.body, {
-    grammar: liveGrammar(bench.holder),
-    value: first.document,
-    // The document is four lines in most presets, so its pane follows its content rather than
-    // claiming the height the grammar needs.
-    sizing: { minHeight: 260, maxHeight: 340 },
-    hover: { enabled: true, delay: 140 },
-    ariaLabel: 'The document',
-    onChange: () => render(bench),
-    onCompletion: (completion) => render(bench, completion),
-  })
-
-  const load = (next: Preset): void => {
-    preset = next
-    bench.source.setValue(next.source, false)
-    bench.doc.setValue(next.document, false)
-    try {
-      bench.holder.current = evaluate(next.source)
-      bench.error.hidden = true
-    } catch (error) {
-      fail(bench, error)
-    }
-    bench.doc.refresh()
-    render(bench)
+  const bench: Bench = {
+    holder: { current: { id: 'empty', rules: [] } },
+    mounted: '',
+    source: undefined as unknown as LiteArea,
+    preview: undefined,
   }
 
+  /** Say that the source does not run, and why, in the mark's tooltip. */
+  const flag = (error: unknown): void => {
+    mark.hidden = false
+    mark.title = error instanceof Error ? error.message : String(error)
+  }
+
+  const clear = (): void => {
+    mark.hidden = true
+    mark.title = ''
+  }
+
+  /** Evaluate a source, or report it and keep the language that is already in force. */
+  const evaluate = (text: string): ExampleModule | undefined => {
+    try {
+      return run(text, litearea as unknown as Record<string, unknown>)
+    } catch (error) {
+      flag(error)
+      return undefined
+    }
+  }
+
+  /** Mount the preview with a language and a document. The options are read here and nowhere else. */
+  const mountPreview = (module: ExampleModule, text: string): void => {
+    bench.holder.current = module.grammar
+    bench.mounted = JSON.stringify(module.options)
+    bench.preview?.destroy()
+    bench.preview = createEditor(previewHost, {
+      ...module.options,
+      grammar: liveGrammar(bench.holder),
+      value: text,
+      hover: { enabled: true, delay: 120 },
+      // The pane owns the height: see `.bench-pane` in the stylesheet. An editor that grows with
+      // its content would make the two panes different heights, and the page is one instrument.
+      sizing: { autoGrow: false },
+      ariaLabel: 'A document in this language',
+    })
+  }
+
+  /** Load one example: its whole file on the left, its own document on the right. */
+  const load = (example: Example): void => {
+    bench.source.setValue(example.source, false)
+    clear()
+    const module = evaluate(example.source)
+    if (module === undefined) return
+    mountPreview(module, module.sample ?? '')
+  }
+
+  let pending = 0
+
+  bench.source = createEditor(sourceHost, {
+    grammar: dslGrammar,
+    value: first.source,
+    sizing: { autoGrow: false },
+    indent: { unit: 2 },
+    hover: { enabled: true, delay: 140 },
+    ariaLabel: 'The language, as source',
+    onChange: (text) => {
+      window.clearTimeout(pending)
+      pending = window.setTimeout(() => {
+        const module = evaluate(text)
+        if (module === undefined) return
+        clear()
+        bench.holder.current = module.grammar
+        const options = JSON.stringify(module.options)
+        // The document is left exactly as the reader has it: an edit to a rule is not an edit to
+        // the text being read, and replacing one would be the editor taking the reader's work away.
+        if (options === bench.mounted) bench.preview?.refresh()
+        else mountPreview(module, bench.preview?.value ?? module.sample ?? '')
+      }, 120)
+    },
+  })
+
   select.addEventListener('change', () => {
-    const next = PRESETS.find((candidate) => candidate.id === select.value)
+    const next = EXAMPLES.find((candidate) => candidate.id === select.value)
     if (next !== undefined) load(next)
   })
 
-  apply.addEventListener('click', () => {
-    try {
-      bench.holder.current = evaluate(bench.source.value)
-      bench.error.hidden = true
-      bench.doc.refresh()
-      render(bench)
-    } catch (error) {
-      fail(bench, error)
-    }
-  })
-
-  reset.addEventListener('click', () => {
-    bench.doc.setValue(preset.document, false)
-    render(bench)
-  })
-
-  render(bench)
+  load(first)
 }
 
 /** Mount every bench on the page. There is one, and there is no reason for there to be two. */
-export function mountBench(): void {
+export function mountPlayground(): void {
   for (const host of document.querySelectorAll<HTMLElement>('[data-bench]')) {
     try {
       build(host)

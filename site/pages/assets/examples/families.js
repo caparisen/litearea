@@ -4,8 +4,8 @@
 //
 // A font stack, which is the language this editor came out of and the one that made the ranking
 // work necessary: four families whose names are one word, two words, or a quoted phrase; a
-// separator that invites another; and a host catalogue big enough that a needle has to be scored
-// rather than filtered.
+// separator that invites another; and a host catalogue big enough that a needle has to be
+// scored rather than filtered.
 //
 // The four things worth reading here:
 //
@@ -13,21 +13,38 @@
 //     start with a `1`. Set it on every row or on none.
 //   - `append: ', '` writes the separator, so accepting a row leaves the document ready for the
 //     next one.
-//   - `commitCharacters: ','` accepts the row when the reader types the comma themselves, so the
-//     keystroke is not swallowed: the separator lands AFTER the insert.
-//   - `mode: 'before'` is how a fallback is promoted: the new family is written ahead of the old
-//     one, and nothing is destroyed.
+//   - `commitCharacters: ','` accepts the row when the reader types the comma themselves, so
+//     the keystroke is not swallowed: the separator lands AFTER the insert.
+//   - `mode: 'before'` is how a fallback is promoted: the new family is written ahead of the
+//     old one, and nothing is destroyed.
+//
+// The playground runs this file and reads three names out of it: `grammar`, `sample`, and
+// `options`. Edit any of them and the preview follows.
+//
+// Things to try:
+//
+//     type `ibm` after the comma, then ArrowDown   → the preview and the panel follow the row
+//     type `,` at the end of a family              → the comma is the row's commit character
+//     put the caret at the end of a named line     → `promote a monospace first`, written ahead
 
 import { defineGrammar, defineVocabulary } from '@citisen/litearea'
 
 /** The families this host knows, in the order it would reach for them. */
-export const FAMILIES: readonly { name: string; detail: string; body: string; generic?: boolean }[] = [
+const FAMILIES = [
   { name: 'Inter', detail: 'sans', body: 'A neutral sans with a tall x-height.' },
-  { name: 'Inter Tight', detail: 'sans, tighter', body: 'The same family with the spacing taken out.' },
+  { name: 'Inter Tight', detail: 'sans, tighter', body: 'The same family, spacing taken out.' },
   { name: 'IBM Plex Mono', detail: 'mono', body: 'A monospace with slab-ish terminals.' },
   { name: 'Iosevka', detail: 'mono, narrow', body: 'A narrow monospace for long lines.' },
-  { name: 'Bricolage Grotesque', detail: 'display', body: 'Three axes, and an odd voice at display sizes.' },
-  { name: 'Source Han Serif SC', detail: 'serif, CJK', body: 'Four words, which is the most a member may span.' },
+  {
+    name: 'Bricolage Grotesque',
+    detail: 'display',
+    body: 'Three axes, and an odd voice at display sizes.',
+  },
+  {
+    name: 'Source Han Serif SC',
+    detail: 'serif, CJK',
+    body: 'Four words, which is the most a member may span.',
+  },
 ]
 
 const CATALOGUE = defineVocabulary({
@@ -42,10 +59,10 @@ const CATALOGUE = defineVocabulary({
   format: (word) => (word.includes(' ') ? `"${word}"` : word),
 })
 
-/** The words a stack is allowed to name instead of a family, plus the quotation and the comma. */
-const GENERIC = ['system-ui', 'sans-serif', 'serif', 'monospace'] as const
+/** The words a stack may name instead of a family, with the quotation and the comma. */
+const GENERIC = ['system-ui', 'sans-serif', 'serif', 'monospace']
 
-export const familiesGrammar = defineGrammar({
+export const grammar = defineGrammar({
   id: 'families',
   name: 'font stack',
 
@@ -61,7 +78,12 @@ export const familiesGrammar = defineGrammar({
     { kind: 'match', scope: 'family.generic', pattern: /system-ui|sans-serif|serif|monospace/ },
     // A name may be two or four words long, and the separators are part of the match, so a
     // completion opened inside `Source Han Serif SC` replaces the whole phrase.
-    { kind: 'words', words: CATALOGUE, phrase: { max: 4 }, when: { after: ['separator', 'property', 'family'] } },
+    {
+      kind: 'words',
+      words: CATALOGUE,
+      phrase: { max: 4 },
+      when: { after: ['separator', 'property', 'family'] },
+    },
   ],
 
   fallbackScope: 'text',
@@ -70,7 +92,11 @@ export const familiesGrammar = defineGrammar({
     const token = context.token
     if (token === undefined) return undefined
     if (token.scope === 'family.generic') {
-      return { title: token.text, detail: 'generic', body: 'Resolved by the browser, not by the host.' }
+      return {
+        title: token.text,
+        detail: 'generic',
+        body: 'Resolved by the browser, not by the host.',
+      }
     }
     const entry = CATALOGUE.entryFor(token.text)
     if (entry === undefined) return undefined
@@ -80,8 +106,8 @@ export const familiesGrammar = defineGrammar({
   compose: [
     {
       id: 'family',
-      // The list stays open over a name that spans several words, which is what `phrase` bought:
-      // the needle is the words typed so far and a row may replace all of them.
+      // The list stays open over a name that spans several words, which is what `phrase`
+      // bought: the needle is the words typed so far and a row may replace all of them.
       when: (context) => !context.firstWord || context.line.before.trim() === '',
       priority: 1,
       range: (context) => context.word,
@@ -121,13 +147,15 @@ export const familiesGrammar = defineGrammar({
       priority: 2,
       when: (context) =>
         context.word.text === '' &&
-        context.tokens.some((token) => token.scope === 'family' || token.scope === 'family.generic'),
+        context.tokens.some(
+          (token) => token.scope === 'family' || token.scope === 'family.generic',
+        ),
       range: (context) => context.word,
       items: () => [
         {
           label: 'promote a monospace first',
           insert: '"IBM Plex Mono", ',
-          mode: 'before' as const,
+          mode: 'before',
           kind: 'action',
           detail: 'written ahead of what is there',
         },
@@ -135,3 +163,12 @@ export const familiesGrammar = defineGrammar({
     },
   ],
 })
+
+/** The document this language is read against: one property and two families. */
+export const sample = ['font: Inter, Iosevka', ''].join('\n')
+
+/**
+ * The inline preview is the point of this example, so the editor is mounted with it switched
+ * on.
+ */
+export const options = { completion: { inline: true } }

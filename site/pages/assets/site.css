@@ -376,29 +376,6 @@ html[data-mode='ink'] [data-mode-word='ink'] {
   padding-left: 8px;
 }
 
-/* The lines that belong beside an article rather than under it, in the margin index's own
-   register. They are a paragraph each and not a list of links, so they are set smaller and are
-   not marked with the accent. */
-.rail-notes {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--ink-3);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.rail-notes li {
-  margin-bottom: 8px;
-  padding-left: 10px;
-  border-left: 1px solid var(--rule);
-}
-
-.rail-notes code {
-  font-size: 11px;
-  color: var(--ink-2);
-}
-
 /* The sibling index at the foot of a page. It is the entry point that survives below 1024px, where
    the sidebar is hidden, so it is a plain ruled list rather than anything clever. */
 .more {
@@ -783,17 +760,21 @@ h4.heading {
 }
 
 /* A hairline scrollbar, so a sideways-scrolling sample does not arrive with a
-   chrome-coloured bar across the bottom of the sheet. */
+   chrome-coloured bar across the bottom of the sheet. The playground's panes are here for a second
+   reason: a scrollbar takes width from the text, and at 1512px the default one costs a column of
+   code that the pane had fitted. */
 .code-body::-webkit-scrollbar,
 .table-wrap::-webkit-scrollbar,
-.live-body ::-webkit-scrollbar {
+.live-body ::-webkit-scrollbar,
+.bench-pane ::-webkit-scrollbar {
   height: 6px;
   width: 6px;
 }
 
 .code-body::-webkit-scrollbar-thumb,
 .table-wrap::-webkit-scrollbar-thumb,
-.live-body ::-webkit-scrollbar-thumb {
+.live-body ::-webkit-scrollbar-thumb,
+.bench-pane ::-webkit-scrollbar-thumb {
   background: var(--rule-2);
 }
 
@@ -884,89 +865,47 @@ h4.heading {
   margin-top: 52px;
 }
 
-/* ─── 13 · the things to try ─────────────────────────────────────────────── */
+/* ─── 13 · the playground ────────────────────────────────────────────────── */
 
-.try {
-  margin: 22px 0 30px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--rule-2);
-  border-bottom: 1px solid var(--rule-2);
-}
-
-.try-label {
-  margin: 0 0 10px;
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: var(--ink-2);
-}
-
-.try .list {
-  margin-bottom: 8px;
-}
-
-.try ul.list > li::before {
-  background: var(--accent);
-}
-
-/* ─── 14 · the playground bench ──────────────────────────────────────────── */
-
-/* The bench is the page rather than a figure on it: the document and the language side by side, and
-   the readout under them. The readout is the pane that scrolls, so the two editors never have to,
-   and it is set in columns of its own — four where there is room — which is what keeps a hundred
-   tokens from being a screenful the reader has to scroll past to get back to the grammar. */
+/* The playground is the page rather than a figure on it: the list at the top, and under it the two
+   editors that are the whole point — the language on the left, a document read with it on the
+   right. Neither pane grows with its content: the page is one instrument, and two editors that
+   each chose their own height would disagree about where the bottom of it is. */
 .bench {
   margin: 16px 0 18px;
-  display: grid;
-  gap: 1px;
-  background: var(--rule-2);
-  border: 1px solid var(--rule-2);
-  border-top: 2px solid var(--ink);
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-
-.bench-pane {
-  background: var(--paper-2);
-  padding: 10px 12px 12px;
-  min-width: 0;
-  min-height: 0;
-}
-
-.bench-pane[data-read] {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-2);
+  border-top: 2px solid var(--ink);
+}
+
+/* An instrument is not an article, and `--page-w` is an article's number: 1280px of prose beside a
+   208px rail and a specimen column. It is a reading measure, and it is the wrong one here — two
+   editors inside 1280px are two columns of sixty-six characters whatever the window is, and at
+   2544px they were still sixty-six characters. So the bench takes the width the window has, the
+   same way it already takes the height the window has.
+
+   The masthead and the foot come with it. The alternative — a wide instrument under a narrow
+   masthead — puts the page's own title out of line with the wordmark above it, and a page that is
+   consistent with itself is worth more than a wordmark that never moves between pages. */
+body.is-wide .page,
+body.is-wide .masthead-row,
+body.is-wide .foot-row {
+  max-width: none;
 }
 
 .bench-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 0 8px;
-  font-family: var(--mono);
-  font-size: var(--mono-size);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-3);
+  gap: 10px;
+  margin: 0;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--rule);
 }
 
-.bench-bar strong {
-  font-weight: 500;
-  color: var(--ink-2);
-  text-transform: none;
-  letter-spacing: 0.04em;
-}
-
-.bench-controls {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.bench-controls button,
-.bench-controls select {
+.bench-bar select {
   font-family: var(--mono);
   font-size: var(--mono-size);
   background: var(--paper);
@@ -978,92 +917,64 @@ h4.heading {
   letter-spacing: 0.04em;
 }
 
-.bench-controls button:hover,
-.bench-controls select:hover {
+.bench-bar select:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.bench-controls button[aria-pressed='true'] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--paper);
+/* The one mark the page has. A source that does not run keeps the last language that did, and this
+   says so without spending a sentence on it: the message is in the tooltip, where a reader who
+   wants it will look for it. */
+.bench-mark {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  background: var(--litearea-error);
 }
 
-/* The readout is the pane that scrolls: the editors above it never have to. Its own columns are
-   what keep a hundred tokens from being a screenful, and its ceiling is what keeps a long document
-   from pushing the editors and the grammar off the window. */
-.bench-read {
-  font-family: var(--mono);
-  font-size: var(--mono-size);
-  line-height: 1.5;
-  overflow: auto;
+.bench-mark[hidden] {
+  display: none;
+}
+
+/* The code gets the larger share, and the number is not a taste: a language is written in lines of
+   a hundred characters, the pane fits a hundred at a 1512px window, and a document in one of these
+   languages is short — the longest line in the six samples is fifty-four characters. Two equal
+   columns would wrap the thing being edited to leave room the preview does not use. */
+.bench-split {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 3fr);
+  gap: 1px;
+  background: var(--rule-2);
   flex: 1 1 auto;
-  min-height: 130px;
-  max-height: 240px;
-  columns: 4 200px;
-  column-gap: 22px;
+  min-height: 0;
 }
 
-.bench-read h4 {
-  margin: 12px 0 4px;
-  font-size: var(--mono-size);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-3);
-  break-after: avoid;
-}
-
-.bench-read h4:first-child {
-  margin-top: 0;
-}
-
-.bench-read ol,
-.bench-read ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.bench-read li {
+.bench-pane {
   display: flex;
-  gap: 8px;
-  padding: 1px 0;
-  border-bottom: 1px dotted var(--rule);
-  break-inside: avoid;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 12px 12px;
+  background: var(--paper-2);
 }
 
-.bench-read .tag {
-  color: var(--ink-3);
-  min-width: 6.4em;
-  flex: none;
+/* The pane owns the height, so the editor fills it and scrolls inside it. `resize` is off because
+   the size is the pane's and not the reader's: a field dragged taller than its pane would push the
+   other side out of the grid. */
+.bench-pane > .litearea {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.bench-read .value {
-  color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-word;
+.bench-pane .litearea-box {
+  box-sizing: border-box;
+  height: 100%;
 }
 
-.bench-read .severity-error {
-  color: var(--litearea-error);
-}
-
-.bench-read .severity-warning {
-  color: var(--litearea-warning);
-}
-
-.bench-read .severity-info {
-  color: var(--litearea-info);
-}
-
-.bench-read .severity-hint {
-  color: var(--ink-3);
-}
-
-.bench-read .empty {
-  color: var(--ink-3);
+.bench-pane .litearea-input {
+  height: 100%;
+  resize: none;
+  overflow-y: auto;
 }
 
 .bench-error {
@@ -1077,7 +988,7 @@ h4.heading {
   white-space: pre-wrap;
 }
 
-/* ─── 15 · the home page ─────────────────────────────────────────────────── */
+/* ─── 14 · the home page ─────────────────────────────────────────────────── */
 
 /* The front page has no title block: its own `<h1>` is the heading. */
 body.kind-home .prose > h1 {
@@ -1111,7 +1022,7 @@ body.kind-home .prose > p:first-child {
   max-width: 34rem;
 }
 
-/* ─── 16 · the foot ──────────────────────────────────────────────────────── */
+/* ─── 15 · the foot ──────────────────────────────────────────────────────── */
 
 .foot {
   margin-top: 40px;
@@ -1137,7 +1048,7 @@ body.kind-home .prose > p:first-child {
   color: var(--accent);
 }
 
-/* ─── 17 · the editors, themed from the page's own palette ───────────────── */
+/* ─── 16 · the editors, themed from the page's own palette ───────────────── */
 
 body .litearea {
   --litearea-font: var(--mono);
@@ -1228,7 +1139,7 @@ body .litearea-dec-base-coat {
   text-underline-offset: 3px;
 }
 
-/* ─── 18 · wide: sidebar, article, specimen ──────────────────────────────── */
+/* ─── 17 · wide: sidebar, article, specimen ──────────────────────────────── */
 
 @media (min-width: 1024px) {
   body.has-rail .page {
@@ -1290,12 +1201,25 @@ body .litearea-dec-base-coat {
     grid-row: 1;
   }
 }
-/* On a window with room to spare the bench takes it, so the whole grammar is on screen without the
-   reader having to scroll the pane to find a rule. --bench-lead is the prose above it, measured by
-   the client: a title that wraps to two lines on one screen and one on another is not a constant. */
+/* On a window with room to spare the bench takes it, so the whole language is on screen without the
+   reader having to scroll either pane to find a rule. --bench-lead is the prose above it, measured
+   by the client: a title that wraps to two lines on one screen and one on another is not a
+   constant. */
 @media (min-width: 900px) and (min-height: 700px) {
   .bench {
     height: calc(100vh - var(--masthead-h) - var(--bench-lead, 220px) - 74px);
+  }
+}
+
+/* Where the window has no room to spare the panes stack instead, because two editors side by side on
+   a narrow screen are two columns of eight characters. */
+@media (max-width: 899px) {
+  .bench-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bench-pane {
+    min-height: 44vh;
   }
 }
 
@@ -1328,7 +1252,7 @@ body .litearea-dec-base-coat {
   }
 }
 
-/* ─── 19 · narrow ────────────────────────────────────────────────────────── */
+/* ─── 18 · narrow ────────────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
   .masthead-row {
@@ -1362,7 +1286,7 @@ body .litearea-dec-base-coat {
   }
 }
 
-/* ─── 20 · search ────────────────────────────────────────────────────────── */
+/* ─── 19 · search ────────────────────────────────────────────────────────── */
 
 .search {
   position: fixed;
@@ -1488,7 +1412,7 @@ body.is-searching {
   overflow: hidden;
 }
 
-/* ─── 21 · reduced motion, and print ─────────────────────────────────────── */
+/* ─── 20 · reduced motion, and print ─────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
   html {

@@ -12,17 +12,52 @@
 // is a word at the head of a line, a value is whatever follows it, and a brace opens a block
 // that may contain another one. The host table behind the keys is also what makes the
 // completion able to say what a KEY's values are, which is the part a word list cannot do.
+//
+// The playground runs this file and reads three names out of it: `grammar`, `sample`, and
+// `options`. Edit any of them and the preview follows.
+//
+// Things to try:
+//
+//     put the caret after `port ` and Ctrl+Space  → the rows are the ports
+//     accept a row with the space                 → the space commits the row, then lands
+//     rename `replicas` to `Replicas`             → the check fires; the key is still offered
+//     open a block inside the block               → each `}` closes one level, innermost first
+//     delete the final `}`                        → the region is unclosed over its brace
 
-import type { Diagnostic, HoverInfo } from '@citisen/litearea'
 import { defineGrammar, defineVocabulary } from '@citisen/litearea'
 
 /** A key, and the values it will accept, in the order a host wants them offered. */
-export const CONF_KEYS: readonly { key: string; detail: string; body: string; values: readonly string[] }[] = [
-  { key: 'image', detail: 'a container image', body: 'A reference, quoted when it carries a tag.', values: [] },
-  { key: 'replicas', detail: 'how many copies to run', body: 'A whole number. Zero takes the service down.', values: ['1', '2', '3', '5', '8'] },
-  { key: 'port', detail: 'the port inside the container', body: 'Where the process listens.', values: ['3000', '8080', '9000'] },
-  { key: 'health', detail: 'the liveness path', body: 'Asked every ten seconds; a failure restarts the container.', values: ['/healthz', '/ready', '/'] },
-  { key: 'memory', detail: 'the memory ceiling', body: 'A number and a unit.', values: ['256Mi', '512Mi', '1Gi', '2Gi'] },
+export const CONF_KEYS = [
+  {
+    key: 'image',
+    detail: 'a container image',
+    body: 'A reference, quoted when it carries a tag.',
+    values: [],
+  },
+  {
+    key: 'replicas',
+    detail: 'how many copies to run',
+    body: 'A whole number. Zero takes the service down.',
+    values: ['1', '2', '3', '5', '8'],
+  },
+  {
+    key: 'port',
+    detail: 'the port inside the container',
+    body: 'Where the process listens.',
+    values: ['3000', '8080', '9000'],
+  },
+  {
+    key: 'health',
+    detail: 'the liveness path',
+    body: 'Asked every ten seconds; a failure restarts the container.',
+    values: ['/healthz', '/ready', '/'],
+  },
+  {
+    key: 'memory',
+    detail: 'the memory ceiling',
+    body: 'A number and a unit.',
+    values: ['256Mi', '512Mi', '1Gi', '2Gi'],
+  },
 ]
 
 const KEYS = defineVocabulary({
@@ -31,29 +66,17 @@ const KEYS = defineVocabulary({
   scope: 'key',
   unknownMessage: '"{word}" is not a key — expected {allowed}.',
   unknownCode: 'unknown-key',
-  docs: Object.fromEntries(CONF_KEYS.map((entry) => [entry.key, { detail: entry.detail, body: entry.body }])),
+  docs: Object.fromEntries(
+    CONF_KEYS.map((entry) => [entry.key, { detail: entry.detail, body: entry.body }]),
+  ),
 })
 
-/** One line the walk understood. */
-export interface Setting {
-  key: string
-  value: string
-  line: number
-  /** Where the key is, so a complaint about it can point at it rather than at the file. */
-  at: { from: number; to: number }
-}
-
-/** What one pass over the document produced. */
-export interface ConfState {
-  settings: Setting[]
-}
-
-export const miniConfGrammar = defineGrammar<ConfState>({
+export const grammar = defineGrammar({
   id: 'mini-conf',
   name: 'mini conf',
 
-  // A key may be written with a dot in it (`cache.ttl`), so the word is not split at the dot and
-  // a completion replaces the whole path.
+  // A key may be written with a dot in it (`cache.ttl`), so the word is not split at the dot
+  // and a completion replaces the whole path.
   wordChars: /[A-Za-z0-9_.-]/,
 
   rules: [
@@ -61,14 +84,17 @@ export const miniConfGrammar = defineGrammar<ConfState>({
     { kind: 'match', scope: 'keyword', pattern: /service/, when: { prevNot: '\\w' } },
     { kind: 'match', scope: 'string', pattern: /"(?:[^"\\]|\\.)*"/ },
     { kind: 'match', scope: 'number', pattern: /\d+(?:\.\d+)?/ },
-    // A block. `nested` lets a block open inside a block, and the contents stay opaque to the
-    // outer one, which is what makes the depth of the document a fact the scanner knows.
+    // A block. `nested` lets a block open inside a block, and `transparent` is what puts this
+    // rule list back to work inside one: a region that is neither transparent nor given `rules`
+    // of its own swallows its body whole, so every key in the block would be one `block` span
+    // and nothing inside it would be a key, a value, or a completion.
     {
       kind: 'region',
       scope: 'block',
       begin: /\{/,
       end: /\}/,
       nested: true,
+      transparent: true,
       unclosed: { severity: 'error' },
     },
     // A key is a word at the head of a line. One the table does not know is reported rather
@@ -83,7 +109,7 @@ export const miniConfGrammar = defineGrammar<ConfState>({
   comments: { line: '#' },
 
   analyze: (text) => {
-    const settings: Setting[] = []
+    const settings = []
     let offset = 0
     for (const [index, raw] of text.split('\n').entries()) {
       const lineFrom = offset
@@ -93,6 +119,7 @@ export const miniConfGrammar = defineGrammar<ConfState>({
       const [, key, value] = match
       if (key === undefined || value === undefined) continue
       const from = lineFrom + raw.indexOf(key)
+      // Where the key is, so a complaint about it can point at it rather than at the file.
       settings.push({
         key,
         value: value.replace(/^"|"$/g, ''),
@@ -116,7 +143,7 @@ export const miniConfGrammar = defineGrammar<ConfState>({
   ],
 
   validate: (context) => {
-    const seen = new Set<string>()
+    const seen = new Set()
     for (const setting of context.state.settings) {
       if (seen.has(setting.key)) {
         context.report({
@@ -136,7 +163,7 @@ export const miniConfGrammar = defineGrammar<ConfState>({
     if (token === undefined || token.scope !== 'key') return undefined
     const entry = KEYS.entryFor(token.text)
     if (entry === undefined) return undefined
-    const info: HoverInfo = { title: token.text }
+    const info = { title: token.text }
     if (entry.detail !== undefined) info.detail = entry.detail
     if (entry.body !== undefined) info.body = entry.body
     return info
@@ -172,14 +199,32 @@ export const miniConfGrammar = defineGrammar<ConfState>({
       },
       range: (context) => context.word,
       items: (context) => {
-        const key = context.tokens.find((token) => token.line === context.line.number && token.scope === 'key')
+        const key = context.tokens.find(
+          (token) => token.line === context.line.number && token.scope === 'key',
+        )
         const entry = CONF_KEYS.find((candidate) => candidate.key === key?.text)
         if (entry === undefined) return []
-        return entry.values.map((value) => ({ label: value, kind: 'value', detail: `a ${entry.key} value` }))
+        return entry.values.map((value) => ({
+          label: value,
+          kind: 'value',
+          detail: `a ${entry.key} value`,
+        }))
       },
     },
   ],
 })
 
-/** A problem the language reports, re-exported for a page that wants the type. */
-export type ConfProblem = Diagnostic
+/** A document written in it: one service block and the keys inside it. */
+export const sample = [
+  '# a deployment',
+  'service api {',
+  '  image "ghcr.io/citisen/api:1.4"',
+  '  replicas 3',
+  '  port 8080',
+  '  health /healthz',
+  '}',
+  '',
+].join('\n')
+
+/** What the editor needs beyond the grammar. This language asks for nothing extra. */
+export const options = {}

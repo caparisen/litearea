@@ -26,35 +26,13 @@ const REPOSITORY = 'https://github.com/citisen/litearea'
 const GROUP_LABEL = new Map([
   ['/docs/', 'Documentation'],
   ['/api/', 'API'],
-  ['/examples/', 'Examples'],
   ['/playground/', 'Playground'],
-])
-
-/**
- * The lines that belong beside an article rather than under it, keyed by page url.
- *
- * They are here and not in the markdown because of what they are for: the playground is an
- * instrument, its article is four sentences, and a list of things to try under it is a second
- * screenful the reader has to scroll past to get back to the editors. In the margin it is beside
- * them, which is where a tip is worth reading.
- */
-const SIDE_NOTES = new Map([
-  [
-    '/playground/',
-    [
-      'Accept a row with `Ctrl+Space`, then keep typing: the trailing space is written for you.',
-      'Rename a key in the **conf** preset, press `apply`, and watch the squiggle appear.',
-      'Break the grammar: the message names the line, and the document keeps the language it had.',
-      'Change a `scope` to a name of your own: it falls back to the text colour.',
-    ],
-  ],
 ])
 
 /** The groups the masthead offers, in the order they are read. */
 export const SITE_INDEX = [
   { label: 'Docs', url: '/docs/' },
   { label: 'API', url: '/api/' },
-  { label: 'Examples', url: '/examples/' },
   { label: 'Playground', url: '/playground/' },
 ]
 
@@ -103,21 +81,24 @@ function groupOf(page) {
  * describes. The second-level ones are the page's own table of contents; the rest are found by
  * reading, or by search.
  *
+ * A group of ONE page is not a list, so it is not shown: the playground is the only page in its
+ * group, and a nav with one entry in it is a nav that tells the reader nothing they did not already
+ * know from the masthead. What the page offers instead is the list at the top of the instrument.
+ *
  * The index is mono, so a heading's markup is taken back off rather than rendered: `` `words` `` is
  * a word here, not a code span, and a backtick set in a monospace face is a backtick.
  *
  * @param page - the page record.
  * @param headings - the headings the renderer collected.
- * @param tips - lines that belong beside the article rather than under it.
  * @returns the nav, or an empty string when there is nothing to list.
  */
-function sidebar(page, headings, tips) {
+function sidebar(page, headings) {
   const entries = headings.filter((heading) => heading.level === 2)
   const group = groupOf(page)
   const label = (text) => escape(text.replace(/`/g, ''))
   const router = routerFor(page.out)
 
-  const chapters = group.map(
+  const chapters = (group.length < 2 ? [] : group).map(
     (entry) =>
       `<li class="rail-item"><a href="${router.href(entry.url)}"` +
       `${entry.url === page.url ? ' aria-current="page"' : ''}>${escape(entry.title)}</a></li>`,
@@ -128,7 +109,7 @@ function sidebar(page, headings, tips) {
       `<li class="rail-item"><a href="#${heading.id}"><span class="rail-text">${label(heading.text)}</span></a></li>`,
   )
 
-  if (chapters.length === 0 && sections.length < 2 && tips.length === 0) return ''
+  if (chapters.length === 0 && sections.length < 2) return ''
 
   const groupLabel = GROUP_LABEL.get(page.nav ?? '') ?? 'Also here'
   return (
@@ -139,29 +120,8 @@ function sidebar(page, headings, tips) {
     (sections.length < 2
       ? ''
       : `<p class="rail-label">On this page</p><ul class="rail-list">${sections.join('')}</ul>`) +
-    (tips.length === 0
-      ? ''
-      : `<p class="rail-label">Try</p><ul class="rail-notes">${tips.map((tip) => `<li>${inline(tip, router)}</li>`).join('')}</ul>`) +
     `</nav>`
   )
-}
-
-/**
- * A line of small print with its inline markup, for the margin.
- *
- * It is rendered for the sidebar and nowhere else, so it is deliberately small: code spans, bold,
- * and a link written as `[text](url)`. Anything else in it stays as the characters it was written
- * with.
- *
- * @param text - the line, as markdown.
- * @param router - the page's router.
- * @returns HTML.
- */
-function inline(text, router) {
-  return escape(text)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_whole, label, href) => `<a href="${escape(router.href(href))}">${label}</a>`)
 }
 
 /**
@@ -209,7 +169,8 @@ export function renderPage(page, article, headings) {
       `${entry.label}</a></li>`,
   ).join('')
 
-  const hasRail = page.nav !== undefined
+  const rail = page.nav === undefined ? '' : sidebar(page, headings)
+  const hasRail = rail !== ''
   const hasSpecimen = page.specimen !== undefined
 
   const specimen = hasSpecimen
@@ -277,7 +238,7 @@ ${page.mirror === undefined ? '' : `<link rel="alternate" type="text/markdown" h
   </div>
 </header>
 <main class="page" id="main">
-${hasRail ? sidebar(page, headings, SIDE_NOTES.get(page.url) ?? []) : ''}
+${rail}
 ${titleBlock}
 <article class="prose">
 ${article}

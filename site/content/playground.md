@@ -1,7 +1,7 @@
 # Playground
 
-Two editors — a document on the left, the language it is read with on the right — and under them
-what `inspect` returns for the text, which is the call the editor makes on every keystroke.
+Six languages, one file each: the rules, the vocabularies, the checks, and a document to read them
+against. Pick one from the list, edit anything in it, and the editor beside it follows.
 
 ::: bench
 :::

@@ -127,8 +127,7 @@ const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;
  *
  * The directives are the whole reason this exists: `::: live` mounts an editor and `::: code`
  * includes a file, and a text copy has to resolve them rather than leave them in. Code is inlined
- * from the file it names — the same file the page runs — and `::: try` becomes the list it was
- * standing in for.
+ * from the file it names — the same file the page runs.
  *
  * @param source - the page's markdown, directives and all.
  * @param env - a link rewriter, which for a mirror is the absolute one.
@@ -172,9 +171,10 @@ function toMarkdown(source, env) {
     }
 
     // `live` and `bench` are editors and have no text form, so they are dropped rather than
-    // described; `try` keeps its label as a bold heading over the list that stood inside it.
-    if (name === 'try') {
-      out.push('**Try**', '', ...body, '')
+    // described. `try` and an unknown name are both mistakes in the source.
+    if (name === 'try') throw new Error(`site: ::: try is gone; the note belongs in the file it is about (${env.sourcePath ?? ''})`)
+    if (name !== 'live' && name !== 'bench' && name !== 'raw') {
+      throw new Error(`site: unknown directive ::: ${name} in ${env.sourcePath ?? 'markdown'}`)
     }
   }
 
@@ -325,12 +325,12 @@ for (const page of PAGES) {
 buildAll()
 
 if (process.argv.includes('--watch')) {
-  // What the build READS. The grammar files are in the list because `::: code` includes them, so a
-  // page that quotes a grammar has to be re-rendered when the grammar changes.
+  // What the build READS. The example sources are in the list because a page can quote a grammar
+  // with `::: code`, so a page that quotes one has to be re-rendered when it changes.
   const watched = [
     join(SITE, 'content'),
     join(SITE, 'ssg'),
-    join(OUT, 'assets', 'live', 'grammars'),
+    join(OUT, 'assets', 'examples'),
     join(ROOT, 'docs'),
     join(ROOT, 'README.md'),
   ]

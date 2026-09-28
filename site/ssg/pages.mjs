@@ -1,6 +1,6 @@
 // ─── the page set ───────────────────────────────────────────────────────────
 //
-// One record per page, grouped the way the site is read: Documentation, API, Examples, Playground.
+// One record per page, grouped the way the site is read: Documentation, API, Playground.
 // `nav` is the group a page belongs to, written out rather than inferred from the url — a group is
 // the list the sidebar shows, and `/docs/grammar/` starting with `/docs/` is a coincidence rather
 // than the fact that puts it there.
@@ -34,7 +34,6 @@ export const PAGES = [
     description:
       'Install litearea, mount a first editor, and find the reference: grammar, completion, theming, options, keys, and limits.',
     sources: ['content/docs.md'],
-    specimen: { id: 'swatch-overview', label: 'swatch' },
   },
   {
     url: '/docs/grammar/',
@@ -123,82 +122,13 @@ export const PAGES = [
     sources: ['../docs/architecture.md'],
   },
   {
-    url: '/examples/',
-    out: 'examples/index.html',
-    kind: 'doc',
-    title: 'Examples',
-    nav: '/examples/',
-    description: 'Six complete languages, each one running live on its own page.',
-    sources: ['content/examples.md'],
-  },
-  {
-    url: '/examples/swatch/',
-    out: 'examples/swatch/index.html',
-    kind: 'example',
-    title: 'Swatch',
-    nav: '/examples/',
-    description: 'A palette whose word set comes from the host rather than from the file.',
-    sources: ['content/example-swatch.md'],
-    specimen: { id: 'swatch', label: 'swatch', controls: ['reset'] },
-  },
-  {
-    url: '/examples/form-schema/',
-    out: 'examples/form-schema/index.html',
-    kind: 'example',
-    title: 'Form schema',
-    nav: '/examples/',
-    description: 'Typed rows, a note region, a declarative check, and an analysis completion reads.',
-    sources: ['content/example-form-schema.md'],
-    specimen: { id: 'form-schema', label: 'form schema', controls: ['reset'] },
-  },
-  {
-    url: '/examples/mini-conf/',
-    out: 'examples/mini-conf/index.html',
-    kind: 'example',
-    title: 'Mini conf',
-    nav: '/examples/',
-    description: 'A key/value configuration language with a nesting region and per-key completion.',
-    sources: ['content/example-mini-conf.md'],
-    specimen: { id: 'mini-conf', label: 'mini conf', controls: ['reset'] },
-  },
-  {
-    url: '/examples/sticky/',
-    out: 'examples/sticky/index.html',
-    kind: 'example',
-    title: 'Sticky headers',
-    nav: '/examples/',
-    description: 'Blocks that nest, with the header the reader is inside pinned to the top of the box.',
-    sources: ['content/example-sticky.md'],
-    specimen: { id: 'sticky', label: 'plan' },
-  },
-  {
-    url: '/examples/typing-aids/',
-    out: 'examples/typing-aids/index.html',
-    kind: 'example',
-    title: 'Typing aids',
-    nav: '/examples/',
-    description: 'Pairs that close themselves, a selection that wraps, and a comment toggle.',
-    sources: ['content/example-typing-aids.md'],
-    specimen: { id: 'typing-aids', label: 'data' },
-  },
-  {
-    url: '/examples/completion/',
-    out: 'examples/completion/index.html',
-    kind: 'example',
-    title: 'Completion',
-    nav: '/examples/',
-    description: 'Tiered ranking, a documentation panel, commit characters, and an inline preview.',
-    sources: ['content/example-completion.md'],
-    specimen: { id: 'completion', label: 'font stack', controls: ['inline', 'reset'] },
-  },
-  {
     url: '/playground/',
     out: 'playground/index.html',
     kind: 'playground',
     title: 'Playground',
     nav: '/playground/',
     description:
-      'Write a grammar and a document in two live editors, and watch what the engine reports for every keystroke.',
+      'Six complete languages, one file each: pick one, edit its source, and read a document with it as you type.',
     sources: ['content/playground.md'],
     wide: true,
   },

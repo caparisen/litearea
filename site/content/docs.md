@@ -50,5 +50,5 @@ A grammar is one object. Rules are tried in order at every position and the firs
 - [Keys and commands](/docs/keys/) — the keymap as data, and what is left to the browser.
 - [Limits](/docs/limits/) — what it does not do, and where the platform decides.
 
-The [API](/api/) is every export by entry point, and the [examples](/examples/) are six complete
-languages.
+The [API](/api/) is every export by entry point, and the [playground](/playground/) is six complete
+languages, each one a file you can edit and run.

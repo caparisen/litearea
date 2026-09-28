@@ -29,7 +29,7 @@ npm install @citisen/litearea
 ## What it is not
 
 No line numbers, no search, no multiple cursors, no bracket matching, no folding, no snippets. There
-is no bundled language: a caller supplies the rules, and the six [examples](/examples/) are six
+is no bundled language: a caller supplies the rules, and the six [examples](/playground/) are six
 grammars written for this site rather than six that ship with the package.
 [Limits](/docs/limits/) lists the rest, including the places where the platform decides for the
 library.
@@ -37,5 +37,4 @@ library.
 ## Start here
 
 - [Documentation](/docs/) — install, a first editor, and the reference.
-- [Examples](/examples/) — six languages, each running live on its own page.
-- [Playground](/playground/) — write a grammar and watch the parse.
+- [Playground](/playground/) — six languages, each one a file you can edit and run.

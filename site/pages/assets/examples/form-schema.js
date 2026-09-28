@@ -11,33 +11,26 @@
 // Eight rules, two vocabularies, two completion sources, a hover, a declarative check, and a
 // walk of the whole document that the validator reads. It is the language the README builds in
 // pieces, assembled here as one object so the page can run it.
+//
+// The playground runs this file and reads three names out of it: `grammar`, `sample`, and
+// `options`. Edit any of them and the preview follows.
+//
+// Things to try:
+//
+//     change `email` to `Email`                    → the check fires
+//     add a second `text email required` row       → the duplicate is reported
+//     put the caret inside `number` and type       → still eligible while spelling
+//     delete the closing quote of the note         → the region reports unclosed
 
-import type { Diagnostic, HoverInfo, Range } from '@citisen/litearea'
 import { defineGrammar, defineVocabulary } from '@citisen/litearea'
 
 /** The field types this language knows. */
-export const FIELD_TYPES = ['text', 'number', 'bool', 'choice'] as const
+export const FIELD_TYPES = ['text', 'number', 'bool', 'choice']
 
 /** The options a field may carry. */
-export const OPTION_WORDS = ['required', 'optional', 'secret'] as const
+export const OPTION_WORDS = ['required', 'optional', 'secret']
 
-/** One field the walk found, located, so the validator can point at the second of two. */
-export interface Field {
-  type: string
-  name: string
-  at: Range
-  line: number
-  /** Whether a bracketed list follows the name, which is what a `choice` field needs. */
-  listed: boolean
-}
-
-/** What one pass over the document produced. */
-export interface FormState {
-  form?: string
-  fields: Field[]
-}
-
-const TYPES = defineVocabulary<FormState>({
+const TYPES = defineVocabulary({
   id: 'field-type',
   words: FIELD_TYPES,
   scope: 'field.type',
@@ -51,7 +44,7 @@ const TYPES = defineVocabulary<FormState>({
   },
 })
 
-const OPTIONS = defineVocabulary<FormState>({
+const OPTIONS = defineVocabulary({
   id: 'option',
   words: OPTION_WORDS,
   scope: 'option',
@@ -62,31 +55,48 @@ const OPTIONS = defineVocabulary<FormState>({
   },
 })
 
-export const formSchemaGrammar = defineGrammar<FormState>({
+export const grammar = defineGrammar({
   id: 'form-schema',
   name: 'form schema',
 
-  // A name may contain a hyphen, so `email-address` is ONE word: a completion replaces the whole
-  // name and a double click selects all of it.
+  // A name may contain a hyphen, so `email-address` is ONE word: a completion replaces the
+  // whole name and a double click selects all of it.
   wordChars: /[\p{L}\p{N}_-]/u,
 
   rules: [
     { kind: 'match', scope: 'comment', pattern: /#[^\n]*/ },
     { kind: 'match', scope: 'keyword', pattern: /form/, when: { prevNot: '\\w' } },
-    { kind: 'match', scope: 'form.name', pattern: /[A-Za-z][\w-]*/, when: { after: ['keyword'] } },
+    {
+      kind: 'match',
+      scope: 'form.name',
+      pattern: /[A-Za-z][\w-]*/,
+      when: { after: ['keyword'] },
+    },
     // A row starts with a field type. Anything else at the head of a line is reported rather
     // than quietly falling through to plain text.
     { kind: 'words', words: TYPES, when: { firstOnLine: true }, unknown: {} },
     { kind: 'words', words: OPTIONS },
-    { kind: 'match', scope: 'name', pattern: /[A-Za-z][\w-]*/, when: { after: ['field.type'] } },
-    { kind: 'region', scope: 'note', begin: /"/, end: /"/, unclosed: { severity: 'warning' } },
+    {
+      kind: 'match',
+      scope: 'name',
+      pattern: /[A-Za-z][\w-]*/,
+      when: { after: ['field.type'] },
+    },
+    {
+      kind: 'region',
+      scope: 'note',
+      begin: /"/,
+      end: /"/,
+      unclosed: { severity: 'warning' },
+    },
     { kind: 'match', scope: 'invalid', pattern: /\S+/ },
   ],
 
   fallbackScope: 'text',
 
+  /** What one pass over the document produced. */
   analyze: (text) => {
-    const state: FormState = { fields: [] }
+    const state = { fields: [] }
     const rows = text.split('\n')
     let offset = 0
 
@@ -103,12 +113,14 @@ export const formSchemaGrammar = defineGrammar<FormState>({
         state.form = second
         continue
       }
+      // One field the walk found, located, so the validator can point at the second of two.
       const nameFrom = lineFrom + whole.indexOf(second)
       state.fields.push({
         type: first,
         name: second,
         at: { from: nameFrom, to: nameFrom + second.length },
         line: index,
+        // Whether a bracketed list follows the name, which is what a `choice` field needs.
         listed: raw.slice(whole.length).includes('['),
       })
     }
@@ -134,7 +146,7 @@ export const formSchemaGrammar = defineGrammar<FormState>({
 
   // ── a declaration that sees the whole document ──────────────────────────
   validate: (context) => {
-    const seen = new Set<string>()
+    const seen = new Set()
     for (const field of context.state.fields) {
       if (field.type === 'choice' && !field.listed) {
         context.report({
@@ -171,9 +183,10 @@ export const formSchemaGrammar = defineGrammar<FormState>({
     const token = context.token
     if (token === undefined) return undefined
     if (token.scope === 'note') return { title: 'note', body: 'Shown under the field.' }
-    const entry = token.scope === 'field.type' ? TYPES.entryFor(token.text) : OPTIONS.entryFor(token.text)
+    const entry =
+      token.scope === 'field.type' ? TYPES.entryFor(token.text) : OPTIONS.entryFor(token.text)
     if (entry === undefined) return undefined
-    const info: HoverInfo = { title: token.text }
+    const info = { title: token.text }
     if (entry.detail !== undefined) info.detail = entry.detail
     if (entry.body !== undefined) info.body = entry.body
     return info
@@ -200,7 +213,10 @@ export const formSchemaGrammar = defineGrammar<FormState>({
       // An option follows a name, and the name may itself still be half-typed.
       when: (context) =>
         context.tokens.some(
-          (token) => token.line === context.line.number && token.scope === 'name' && token.to <= context.caret,
+          (token) =>
+            token.line === context.line.number &&
+            token.scope === 'name' &&
+            token.to <= context.caret,
         ),
       range: (context) => context.word,
       items: () =>
@@ -214,5 +230,16 @@ export const formSchemaGrammar = defineGrammar<FormState>({
   ],
 })
 
-/** One diagnostic's worth, for a page that wants to show the shape of the state. */
-export type FormProblem = Diagnostic
+/** A document written in it: a signup form with four fields, a note, and one bracketed list. */
+export const sample = [
+  '# the signup form',
+  'form signup',
+  '  text    email     required',
+  '  text    password  secret   "at least 12 characters"',
+  '  number  age       optional',
+  '  choice  plan      required  [free, pro]',
+  '',
+].join('\n')
+
+/** What the editor needs beyond the grammar. Hover is on site-wide, so nothing extra. */
+export const options = {}

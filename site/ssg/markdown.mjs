@@ -8,9 +8,10 @@
 // small enough to read in one sitting.
 //
 // What it adds to Markdown is four directives, because a documentation page is not only
-// prose: `::: live` mounts a real editor, `::: try` is the list of things to do to it,
-// `::: bench` is the playground's three panes, and `::: code` includes a file by path so a
-// sample cannot drift from the file it quotes.
+// prose: `::: live` mounts a real editor, `::: bench` is the playground, `::: code` includes a
+// file by path so a sample cannot drift from the file it quotes, and `::: raw` is HTML written
+// by hand. `::: try` was a fifth and is gone: a list of things to do belonged beside an editor
+// and now belongs in the file that editor runs.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -229,12 +230,10 @@ export function renderMarkdown(source, env) {
       }
 
       if (name === 'try') {
-        out.push(
-          `<div class="try"><p class="try-label">Try</p>` +
-            renderMarkdown(body.join('\n'), env).html +
-            `</div>`,
-        )
-        continue
+        // Kept as an error rather than a directive that renders nothing: a `::: try` block is a
+        // block of prose that used to be printed beside an editor, and it belongs in the file the
+        // editor runs. The site has none, and a page that grows one should be told.
+        throw new Error(`::: try is gone; put the note in the source file it is about (${env.sourcePath ?? 'markdown'})`)
       }
 
       if (name === 'code') {
