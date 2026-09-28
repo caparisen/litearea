@@ -8,26 +8,19 @@ complete(inspection, grammar, request): Completion | undefined
 applyCompletion(text, range, item): AppliedCompletion
 ```
 
-They are separate because they fail differently. `complete` answers "what could go
-here?" and returns rows; `applyCompletion` answers "what does the document
-become?" and returns text plus a caret. Keeping them apart is what makes the hard
-half — the interaction — testable in Node without a browser, and it is where the
-two bugs that make a completer feel broken have somewhere to live:
+They fail differently: `complete` answers "what could go here?" and returns rows,
+`applyCompletion` answers "what does the document become?" and returns text plus a
+caret. Keeping them apart makes the interaction testable in Node without a browser.
 
-- **A source that swaps mid-typing loses the thread.** The list opens over a family
-  name, the user types `=` and it becomes a value list, and the row they were
-  looking at is gone. So once a source has answered, it keeps answering for as long
-  as it stays eligible, and priority only decides which source *opens* the list.
-- **A range that does not grow leaves text behind.** The range is recomputed from
-  the caret on every filter, never held over: type `ru`, accept `running`, and the
-  range has to cover both letters. An earlier version of this library held the range
-  resolved when the list opened, which replaces only the `r` and leaves `running u`
-  behind — a bug invisible to a test that only ever types one character before
-  accepting, and the reason this rule is written down here.
-- **A caret computed from the wrong end lands in the wrong place.** Every offset
-  here is counted in the same coordinate system as the document, and the final
-  caret is computed from the pieces actually written, never re-derived by
-  searching the result.
+- **A source that swaps mid-typing loses the thread.** Once a source has answered it
+  keeps answering while it stays eligible; priority only decides which source *opens*
+  the list.
+- **A range that does not grow leaves text behind.** The range is recomputed from the
+  caret on every filter, never held over, so typing `ru` and accepting `running`
+  covers both letters.
+- **A caret computed from the wrong end lands in the wrong place.** Every offset is
+  counted in the document's own coordinates, and the final caret is computed from the
+  pieces actually written, never re-derived by searching the result.
 
 ## How the editor decides to open the list
 
@@ -45,13 +38,11 @@ two bugs that make a completer feel broken have somewhere to live:
 | The editor itself is writing | Nothing re-opens: the editor knows its own edit from the user's |
 | Any `input` event while `readOnly` | Nothing |
 
-`triggerCharacters` is empty by default, so a separator does not open the list. A
-space is where the next token starts, which is the argument for opening there,
-and it loses to the habit a reader already has: the editor this is modelled on
-offers nothing on a space and waits for a letter or for `Ctrl+Space`. Nothing is
-stranded by it — the list stays open while the next token is typed, so a value
-after a name is still suggested in place — and a language whose separator really
-is the moment the next token becomes guessable names it explicitly.
+`triggerCharacters` is empty by default, so a separator does not open the list. The
+editor this is modelled on waits for a letter or for `Ctrl+Space`. The list stays open
+while the next token is typed, so a value after a name is still suggested in place, and
+a language whose separator is the moment the next token becomes guessable names it
+explicitly.
 
 `auto: false` (or `completion: false` on the editor) switches off every row above
 except `Ctrl+Space`, `Escape`, and the arrows; `showCompletions()` and
@@ -76,21 +67,36 @@ reads what is on screen.
 | `when` | Eligible only when this holds. Absent, always eligible |
 | `range` | The range a chosen row replaces: a `Range` or `(context) => Range`. A function's result is normalised so `from <= to` |
 | `items` | `(context) => readonly SuggestionItem[]` — the rows, in whatever order the grammar wants them scored |
-| `priority` | Higher wins when several sources could open the list. Default 0, and ties go to the source declared first |
+| `priority` | Higher wins when several sources could open the list. Default 0, and ties go to the source declared first — or, in a composite document, to the innermost language |
 | `merge` | Adds this source's rows to the winner's instead of competing with it |
 
 Several sources may be declared, and **priority only decides which one opens the
-list**. Once a source has answered, it is the one asked again while the list is
-open, for as long as its `when` still holds; only when it stops being eligible does
-the list fall back to the highest-priority eligible source. That is what keeps the
-rows from changing identity under the reader's hands — typing a character that makes
-a different source eligible does not swap the list out from under them.
+list**. Once a source has answered it is the one asked again while its `when` holds;
+only when it stops being eligible does the list fall back to the highest-priority
+eligible source, so the rows do not change identity under the reader's hands. Rows
+from a source that sets `merge: true` are appended to the winner's rows, so a
+document-wide source (every property already used elsewhere) sits alongside a closed
+vocabulary without having to win anything.
 
-Rows from a source that sets `merge: true` are appended to the winner's rows, which
-is how a document-wide source (every property already used elsewhere) sits alongside
-a closed vocabulary without having to win anything.
+### A composite document: several languages, one list
 
-The range is a separate question, and it is answered fresh on every call:
+When a grammar embeds another, such as a Markdown fence whose `grammar` is chosen
+from its info string, every language whose territory encloses the caret offers its
+sources, and the document's own grammar offers its own. They are collected
+**innermost first**, which is the tie-breaker: an embedded JSON list and an outer
+Markdown list both at their default `priority` are won by the JSON one, while an
+outer source that names a higher `priority` still takes the list.
+
+What is per-language is the **context**, not the mechanism. Each source is asked with
+its own grammar's `state` and its own `wordChars`, and the range a row replaces is
+grown with the word predicate of the language that answered, so the same typed
+characters replace a different span inside a fence and outside it. `tokens` and
+`diagnostics` are the one spliced list, shared by every language in play.
+
+`Completion.grammarId` records which grammar answered, which is how an accepted row reaches
+that grammar's `onAccept` rather than always the document's own.
+
+The range is answered fresh on every call:
 
 ```ts
 // The range is recomputed from the caret on every filter. Never reused.
@@ -104,18 +110,17 @@ The range is a separate question, and it is answered fresh on every call:
 // against now, not the text that happened to be there when the list appeared.
 ```
 
-The winner's `range` — a `Range`, or a `(context) => Range` whose result is
-normalised so `from <= to` — is therefore resolved on every call, and only the
-winner's is resolved at all, so two sources cannot disagree about it. A word-shaped
-range grows with the word and an entry-shaped range grows with the entry.
+The winner's `range` is a `Range`, or a `(context) => Range` normalised so
+`from <= to`, resolved on every call and only for the winner, so two sources cannot
+disagree about it. A word-shaped range grows with the word and an entry-shaped range
+grows with the entry.
 
-The needle is the text the user has typed *inside* that range, clamped to the range
-at both ends — `text.slice(clamp(range.from, 0, caret), clamp(caret, range.from,
-range.to))`. Clamping the far end matters: a caret can sit past the range, after the
-trailing space of an entry, and slicing straight to the caret there would pull the
-separator into the needle and filter the list by a character nobody meant to search
-for. Reading the needle inside the range is also the only reading that stays
-meaningful when the range is a whole entry rather than a word.
+The needle is the text typed *inside* that range, clamped at both ends:
+`text.slice(clamp(range.from, 0, caret), clamp(caret, range.from, range.to))`.
+Clamping the far end matters, because a caret can sit past the range, after the
+trailing space of an entry, and slicing straight to the caret would pull the
+separator into the needle. Reading the needle inside the range is also the only
+reading that stays meaningful when the range is a whole entry.
 
 ## The rows
 
@@ -136,15 +141,14 @@ meaningful when the range is a whole entry rather than a word.
 | `caretOffset` | Where the caret lands, counted back from the end of everything written. Negative moves it left |
 | `data` | Opaque payload. Passed to `onAccept` inside the `item` |
 
-`mode: 'before'` is how a value is placed in front of an existing one without
-destroying it: promoting a fallback font, or adding a state above a line that
-already exists. It inserts at the range's start, drops the whitespace that
-followed the old entry and restores a single separating space when one is needed,
-and reports `from` and `to` as the same offset, because nothing was removed.
+`mode: 'before'` places a value in front of an existing one without destroying it:
+promoting a fallback font, or adding a state above a line that already exists. It
+inserts at the range's start, drops the whitespace that followed the old entry,
+restores a single separating space when one is needed, and reports `from` and `to` as
+the same offset, because nothing was removed.
 
-`caretOffset` is one fixed offset, not a set of snippet stops — there is no
-placeholder support, so a `caretOffset: -1` on `insert: '()'` is the whole of what
-a snippet would be here.
+`caretOffset` is one fixed offset, not a set of snippet stops: a `caretOffset: -1` on
+`insert: '()'` is all a snippet would be here.
 
 ## The context
 
@@ -167,22 +171,17 @@ Every field a source may look at:
 
 `firstOnLine` and `firstWord` both exist because a line-oriented language puts
 something special at the head of every line, and a completion for it has to stay
-eligible while that head is being spelled out. `runn\|` is no longer "at the start
-of the line" in the strict sense — the line already has content — but it is
-unmistakably completing the first word. A source that asked `firstOnLine` would
-switch itself off after the very first keystroke, which is the bug the second field
-exists to prevent. A line-oriented grammar's first-word completion asks
-`firstWord` for exactly this reason, and it is the difference between a list that
-helps and a list that keeps disappearing.
+eligible while that head is being spelled out. `runn\|` is no longer "at the start of
+the line" in the strict sense, since the line already has content, but it is
+completing the first word. A source that asked `firstOnLine` would switch itself off
+after the first keystroke, so the first-word completion asks `firstWord`.
 
 ## Ranking
 
-Filtering and ordering are different jobs, and only the second one decides how a
-completer feels. Typing `ruboc` should not be able to push an exact match below a
-coincidence, so the ordering is a **tier** plus a local score rather than one
-arithmetic blend: a single blend is untestable, because nobody can say what the
-number 47.3 means. A tier is worth a million points, so a local bonus can never
-cross one.
+Filtering and ordering are different jobs. The ordering is a **tier** plus a local
+score rather than one arithmetic blend, so an exact match cannot be pushed below a
+coincidence and the result stays testable. A tier is worth a million points, so a
+local bonus can never cross one.
 
 | Tier | Value | How it is reached | Example |
 | --- | --- | --- | --- |
@@ -193,23 +192,21 @@ cross one.
 | substring | 1 | The needle appears as one unbroken run inside the label | `lex` → `Plex Inter`, `bm` → `IBM Plex Mono` |
 | subsequence | 0 | The needle's characters appear in order, with gaps | `ton` → `Noto Sans` |
 
-Two details of that table are worth pulling out. `IPM` finds `IBM Plex Mono`
-without being a substring of anything: the gap search tries *every* position the
-first character could have started at, rather than only the first hit, because a
-greedy match would take the `P` of `Plex` and then fail to find an `M` when the
-`M` of `Mono` was available all along. And `jbmo` reaches the boundary tier rather
-than the subsequence one — every one of its characters starts a word or continues
-the run before it — so the subsequence tier is reached only when a matched
-character sits inside a word without continuing the match, as the `t` of `Noto`
-does.
+Two details of that table. `IPM` finds `IBM Plex Mono` without being a substring of
+anything: the gap search tries every position the first character could have started
+at, not only the first hit, because a greedy match would take the `P` of `Plex` and
+then fail to find an `M` when the `M` of `Mono` was available. `jbmo` reaches the
+boundary tier, since every character starts a word or continues the run before it, so
+the subsequence tier is reached only when a matched character sits inside a word
+without continuing the match, as the `t` of `Noto` does.
 
 Case follows the needle: a needle with any uppercase character is matched
-case-sensitively, so `Inter` does not quietly match `inter`, while an all-lowercase
-needle matches anything. That is the "smart case" a terminal has used for decades.
+case-sensitively, so `Inter` does not match `inter`; an all-lowercase needle matches
+anything.
 
-`sortText` is the primary key and the score is the tie-break inside a group. It is
-how a grammar puts a whole group on top — the value already in effect, the shipped
-rate — without pretending its label starts with a `0`:
+`sortText` is the primary key and the score is the tie-break inside a group, so a
+grammar can put a whole group on top (the value already in effect, the shipped rate)
+without pretending its label starts with a `0`:
 
 | Rows | `sortText` | Result |
 | --- | --- | --- |
@@ -217,30 +214,26 @@ rate — without pretending its label starts with a `0`:
 
 That last cell is the trap, and the type warns about it in the same words: a row with
 no `sortText` is keyed by its **label**, so a grammar that sets `sortText` on some
-rows and not others is comparing its sort keys against other rows' labels — two
-different kinds of string, in one sort. Set it on every row, or on none.
+rows and not others compares sort keys against other rows' labels. Set it on every
+row, or on none.
 
-With no `sortText` anywhere, rows are sorted by score alone on a stable sort,
-which keeps the order the grammar declared for everything the needle does not
-separate. That is load-bearing: an empty needle must show a catalogue in catalogue
-order — what `Ctrl+Space` is for — and an alphabetical tie-break would quietly
-rearrange a list the grammar had already ranked. An empty needle keeps every row,
-with no emphasis.
+With no `sortText` anywhere, a stable sort by score alone keeps the order the grammar
+declared for everything the needle does not separate. An empty needle shows every row
+in catalogue order, with no emphasis: that is what `Ctrl+Space` is for.
 
-`filterText` is matched instead of `label`, so a row can be found by text it does
-not display. The matched offsets are only meaningful against the label, so a row
-that matched on different text is ranked without an emphasis rather than with the
-wrong one. `highlightSegments(label, indices)` is exported for the caller that
-builds the row: it returns alternating plain and matched pieces rather than
-markup, because the caller is building DOM nodes, not HTML, and a label that says
-`<b>` has to reach the reader as a literal `<b>`, not as a bold word.
+`filterText` is matched instead of `label`, so a row can be found by text it does not
+display. The matched offsets are only meaningful against the label, so a row that
+matched on different text is ranked without an emphasis. `highlightSegments(label,
+indices)` is exported for the caller that builds the row: it returns alternating
+plain and matched pieces rather than markup, because the caller builds DOM nodes and a
+label that says `<b>` has to reach the reader as a literal `<b>`.
 
-`rank(items, needle, options)` is the exported entry point (`options` is
-`label`, `filterText?`, `sortText?`), and `fuzzyMatch(needle, label)` returns the
-raw `{ score, indices, tier }` for one pair. `isWordStart` is exported too: it is
-the word test the ranking uses, where a word starts at the beginning, after a
-separator (`\s-_./:@()+[]`), or at a lower-to-upper transition — which is what
-makes camelCase names searchable by their humps.
+`rank(items, needle, options)` is the exported entry point (`options` is `label`,
+`filterText?`, `sortText?`), and `fuzzyMatch(needle, label)` returns the raw
+`{ score, indices, tier }` for one pair. `isWordStart` is exported too: the word test
+the ranking uses, where a word starts at the beginning, after a separator
+(`\s-_./:@()+[]`), or at a lower-to-upper transition, which makes camelCase names
+searchable by their humps.
 
 ## Applying a row
 
@@ -256,16 +249,13 @@ makes camelCase names searchable by their humps.
 | `insert` | The text written between those two offsets |
 
 `from`, `to`, and `insert` exist alongside `text` because an editor must write only
-the range that changed. Assigning the whole recomputed `text` would be simpler and
-would throw away the browser's undo history, which is the one thing this library
-exists to protect. The editor therefore writes exactly `insert` over `[from, to)`
-through the editing pipeline, then puts the caret at `caret` with
-`setSelectionRange` — a selection write touches no text, so it cannot disturb the
-history. Accepting a completion with `Enter` or `Tab` is therefore one undoable
-edit, and the browser check asserts that undo restores the text as it was before
-the accept and that redo puts it back. A commit character is written as a second
-edit through the same pipeline, so whether the browser groups the two is the
-browser's business rather than a promise this library makes.
+the range that changed. Assigning the whole recomputed `text` would throw away the
+browser's undo history. The editor writes `insert` over `[from, to)` through the
+editing pipeline, then puts the caret at `caret` with `setSelectionRange`; a selection
+write touches no text and cannot disturb the history. Accepting with `Enter` or `Tab`
+is one undoable edit, and the browser check asserts that undo restores the text and
+redo puts it back. A commit character is written as a second edit through the same
+pipeline, so whether the browser groups the two is the browser's business.
 
 `append` is skipped when the document already says it:
 
@@ -277,8 +267,8 @@ browser's business rather than a promise this library makes.
 | `applyCompletion('Inter', { from: 0, to: 5 }, { label: 'Geist', mode: 'before', append: ', ' })` | `Geist, Inter`, caret 7 | Nothing was removed; the new family is written ahead of the old one and keeps the comma that invites the next fallback |
 
 `append` is the grammar's business and not the engine's: inviting another entry
-with a `, ` is a fact about font stacks, and an engine that appended one by
-default would be guessing about every other language.
+with a `, ` is a fact about font stacks, and a default would be guessing about
+every other language.
 
 ## Against VSCode
 
@@ -306,11 +296,10 @@ default would be guessing about every other language.
   `isIncomplete` and no re-query after the accept.
 - **The list closes on accept.** A commit character writes the row and then the
   character and leaves no list open, so a grammar cannot chain two completions
-  through a commit. There is no `'commit'` trigger for the same reason: a union
-  member nothing can return is a promise the code does not keep.
+  through a commit. There is no `'commit'` trigger.
 - **No snippet stops.** `caretOffset` is one offset from the end of what was
-  written, so a grammar can land the caret inside a pair of parentheses and
-  nowhere else.
+  written, so a grammar can land the caret inside a pair of parentheses and nowhere
+  else.
 - **The source is sticky while it stays eligible.** Only the source that answered
   first is asked again, and `priority` decides only which source opens a closed
   list; a source that sets `merge: true` still contributes its rows either way.
@@ -320,9 +309,12 @@ default would be guessing about every other language.
 - **`limit` applies after ranking**, so it caps what is returned without saving the
   work of producing it.
 - **Rows can come back empty.** `complete` returns `undefined` when no source is
-  eligible or when the winning source produced no rows at all, and a `Completion`
-  with an empty `rows` array when the needle filtered every row out. The editor
-  treats both as "close the list", not as "show an empty panel".
+  eligible or the winning source produced no rows, and a `Completion` with an empty
+  `rows` array when the needle filtered every row out. The editor treats both as
+  "close the list", not as "show an empty panel".
 - **`onAccept` is called after the edit**, with `{ text, caret, item, state }` where
-  `state` is the analysis of the resulting text. It is the place to sync a host's
-  own state without re-parsing.
+  `state` is the analysis of the resulting text, the place to sync a host's own state
+  without re-parsing. In a composite document it is the hook of the grammar the row
+  came from, the one `Completion.grammarId` names, so an embedded language's
+  `onAccept` is reached, and the document's own is asked only when the caret is
+  outside every embedded region.

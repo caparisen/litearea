@@ -1,6 +1,7 @@
 # API
 
-Every export of `@citisen/litearea`. Options and methods are on [Options and methods](/docs/options/).
+Every export of `@citisen/litearea`. Options and methods are in
+[Options and methods](/docs/options/), and the React binding is in [React](/api/react/).
 
 Three entry points and no more:
 
@@ -37,8 +38,8 @@ Pure: text and a grammar in, values out. No DOM.
 
 | Group | Exports |
 | --- | --- |
-| Grammar | `defineGrammar`, `defineCompletion`, `resolveGrammar`, `isResolvedGrammar`, `scan`, `ResolvedGrammar`, `ScanResult` |
-| Inspection | `inspect`, `normalizeDiagnostics`, `Inspection` |
+| Grammar | `defineGrammar`, `defineCompletion`, `resolveGrammar`, `isResolvedGrammar`, `scan`, `ResolvedGrammar`, `ScanResult`, `RegionEmbed` |
+| Inspection | `inspect`, `languageAt`, `languageChain`, `normalizeDiagnostics`, `Inspection`, `LanguageSpan` |
 | Vocabulary | `defineVocabulary`, `asResolvedVocabulary`, `resolveWordsSource`, `vocabularyWords`, `VocabularySpec` |
 | Segments | `buildSegments`, `segmentClasses`, `PaintSegment`, `SegmentInput` |
 | Ranking | `rank`, `fuzzyMatch`, `highlightSegments`, `isWordStart`, `Ranked`, `FuzzyMatch`, `RankOptions` |
@@ -53,15 +54,11 @@ Pure: text and a grammar in, values out. No DOM.
 | Styles | `LITEAREA_STYLES`, `injectStyles`, `scopeClass`, `decorationClass`, `severityClass` |
 
 Grammar-facing types, from the same entry point: `Grammar`, `Rule`, `MatchRule`, `WordsRule`,
-`RegionRule`, `CheckRule`, `RuleContext`, `RuleMatch`, `Token`, `Scope`, `ScopeSpec`, `Severity`,
-`Range`, `Diagnostic`, `Decoration`, `DiagnoseContext`, `HoverContext`, `HoverInfo`, `Completion`,
-`CompletionContext`, `CompletionRow`, `CompletionSource`, `CompletionTrigger`, `SuggestionItem`,
-`VocabularyContext`, `VocabularyEntry`, `ResolvedVocabulary`, `WordInfo`, `LineInfo`, `WordsSource`,
-`CommentSyntax`, `AutoPair`.
-
-`excerpt`, `fillTemplate`, and `listPhrase` are the substitution helpers a diagnostic message is
-built from, and they are exported because a host writing its own message wants the same `{word}` and
-`{allowed}` handling the vocabulary's `unknownMessage` gets.
+`RegionRule`, `RegionFrame`, `RegionEnd`, `RegionEmbed`, `LanguageSpan`, `CheckRule`, `RuleContext`,
+`RuleMatch`, `Token`, `Scope`, `ScopeSpec`, `Severity`, `Range`, `Diagnostic`, `Decoration`,
+`DiagnoseContext`, `HoverContext`, `HoverInfo`, `Completion`, `CompletionContext`, `CompletionRow`,
+`CompletionSource`, `CompletionTrigger`, `SuggestionItem`, `VocabularyContext`, `VocabularyEntry`,
+`ResolvedVocabulary`, `WordInfo`, `LineInfo`, `WordsSource`, `CommentSyntax`, `AutoPair`.
 
 ## Generated class names
 
@@ -71,6 +68,10 @@ built from, and they are exported because a host writing its own message wants t
 | `litearea-dec-<kind>` | A decoration's `kind` |
 | `litearea-diag-<severity>` | `error`, `warning`, `info`, `hint` |
 | `litearea-kind-<kind>` | A completion row's `kind` |
+
+`excerpt`, `fillTemplate`, and `listPhrase` are the substitution helpers a diagnostic message is
+built from, and they are exported because a host writing its own message wants the same `{word}` and
+`{allowed}` handling the vocabulary's `unknownMessage` gets.
 
 ## Version
 

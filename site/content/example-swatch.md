@@ -1,10 +1,8 @@
 # Swatch
 
-A palette language whose word set comes from the host rather than from the file. `red circle 20` is
-a valid swatch in one application and an error in another, and the document does not change between
+A palette language whose word set comes from the host rather than from the file. `red circle 20` is a
+valid swatch in one application and an error in another, and the document does not change between
 them.
-
-Source: `site/pages/assets/live/grammars/swatch.ts`.
 
 ## The language
 
@@ -30,8 +28,7 @@ Source: `site/pages/assets/live/grammars/swatch.ts`.
 | `compose[1]`, shapes | `priority: 1`, so it takes the moment from the colour source once a colour is on the line |
 | `decorate` | Marks the host's base coat. A decoration, not a token, because it depends on the host's palette and not on the characters |
 
-## Try
-
+::: try
 - Type `mauve circle 20` with the default palette: `mauve` earns one diagnostic.
 - Type `teal blob 40`: `blob` earns another.
 - Put the caret at the start of an empty line and press `Ctrl+Space`, accept a colour, then press it
@@ -39,3 +36,4 @@ Source: `site/pages/assets/live/grammars/swatch.ts`.
 - Hover `rounded` for the entry the vocabulary carries.
 - Type `red` on a second line: the word is a member and still earns a warning, because painting a
   colour twice is the document's business and not the word set's.
+:::

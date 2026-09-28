@@ -1,9 +1,8 @@
 // ─── the site's one script ──────────────────────────────────────────────────
 //
-// Five small things and one large one. The small things are chrome: the paper/ink switch, the
-// running head that arrives when the masthead leaves, the progress hairline, the margin index
-// following the reader, and a copy button on every sample. The large one is that every live
-// editor on the page is mounted from here.
+// Four small things and one large one. The small things are chrome: the paper/ink switch, the
+// sidebar following the reader through the page, and a copy button on every sample. The large one
+// is that every live editor on the page is mounted from here.
 //
 // It is deliberately one file and no framework. The page is already HTML by the time this runs;
 // nothing here builds content, and the only thing it knows how to make is an editor.
@@ -41,11 +40,13 @@ function wireMode(): void {
   sync()
 }
 
-// ── the running head, the progress hairline, and the margin index ───────────
+// ── the sidebar ─────────────────────────────────────────────────────────────
+//
+// The masthead is sticky, so the line a section has to pass to count as reached is measured from
+// the bottom of the masthead rather than from the top of the window.
 
 function wireReading(): void {
   const masthead = document.querySelector('.masthead')
-  const runningSection = document.querySelector<HTMLElement>('[data-running-section]')
   const railItems = [...document.querySelectorAll<HTMLElement>('.rail-item')]
   const railLinks = railItems.map((item) => item.querySelector('a'))
   const targets = railLinks
@@ -59,34 +60,19 @@ function wireReading(): void {
    * correction rather than a preference: a scroll handler is already coalesced to one call per
    * frame by the browser, the work here is a dozen `getBoundingClientRect` calls against elements
    * that are already being read for the paint, and a version that queued a frame could leave the
-   * running head describing the section the reader was in a moment ago — or, on a page that never
-   * produces another frame, never update at all.
+   * sidebar describing the section the reader was in a moment ago.
    */
   const update = (): void => {
-    const scrollable = root.scrollHeight - window.innerHeight
-    root.style.setProperty('--progress', scrollable <= 0 ? '0' : String(Math.min(1, window.scrollY / scrollable)))
-
-    // The running head arrives when the masthead has left. It is measured rather than observed:
-    // an IntersectionObserver is the tidier way to say it and the wrong tool here, because it
-    // reports nothing until it has computed a layout, and a bar that never appears because a
-    // callback has not run yet is a worse failure than one that appears a frame late.
-    const mastheadHeight = masthead?.getBoundingClientRect().height ?? 0
-    document.body.classList.toggle('is-scrolled', window.scrollY > mastheadHeight - 8)
-
     if (railItems.length === 0) return
-    // The active section is the LAST heading whose top edge has passed under the running head.
+    // The active section is the LAST heading whose top edge has passed under the masthead.
     // Reading positions rather than observing intersections is what makes a short section between
     // two long ones still count as reached.
-    const line = window.innerHeight * 0.28
+    const line = (masthead?.getBoundingClientRect().bottom ?? 0) + window.innerHeight * 0.2
     let active = -1
     targets.forEach((target, index) => {
       if (target.getBoundingClientRect().top <= line) active = index
     })
     railItems.forEach((item, index) => item.classList.toggle('is-active', index === active))
-    if (active >= 0 && runningSection !== null) {
-      const text = railLinks[active]?.querySelector('.rail-text')?.textContent
-      if (text !== null && text !== undefined) runningSection.textContent = text
-    }
   }
 
   window.addEventListener('scroll', update, { passive: true })

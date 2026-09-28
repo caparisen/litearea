@@ -25,9 +25,9 @@ three exceptions the last table lists; everything else changes through a method.
 | `sizing.minHeight` | — | A minimum height in pixels, in addition to `minRows` |
 | `sizing.maxHeight` | — | A maximum height in pixels, in addition to `maxRows` |
 
-A maximum below the minimum is raised to the minimum rather than honoured. Past the clamp the field
-scrolls, and the measured scrollbar width is published as `--litearea-scrollbar` so the layer wraps
-where the field wraps.
+A maximum below the minimum is raised to the minimum. Past the clamp the field scrolls, and the
+measured scrollbar width is published as `--litearea-scrollbar` so the layer wraps where the field
+wraps.
 
 ## Behaviour
 
@@ -45,7 +45,7 @@ where the field wraps.
 | `hover.delay` | `140` | Milliseconds the pointer must rest |
 | `sticky` | — | `{ kinds: ['block'] }` pins the header of the block the reader is inside, one row per level. Off unless passed |
 | `indent.unit` | `2` | One level of indentation: a width in spaces, or the characters themselves (`'\t'`) |
-| `keys` | `[]` | Extra bindings, tried BEFORE the defaults |
+| `keys` | `[]` | Extra bindings, tried before the defaults |
 | `decorations` | `true` | Whether `decorate`'s ranges are painted |
 | `injectStyles` | `true` | Whether the stylesheet is injected. `false` for a host that links `styles.css` |
 | `styleNonce` | — | A CSP nonce for that injected stylesheet |
@@ -55,7 +55,7 @@ where the field wraps.
 
 | Callback | Called with | When |
 | --- | --- | --- |
-| `onChange` | the new text | After a USER edit. A write the library performs is marked as its own first and is not reported |
+| `onChange` | the new text | After a user edit. A write the library performs is marked as its own first and is not reported |
 | `onSelectionChange` | `{ start, end, direction }` | When the caret or the selection moves |
 | `onDiagnostics` | the problem list | Once at mount, then only when the list really changed — compared on position, code, and message |
 | `onCompletion` | the open list, or `undefined` | When the list opens, filters, or closes |
@@ -65,7 +65,7 @@ where the field wraps.
 
 | Member | What it does |
 | --- | --- |
-| `element` | The wrapper. Put it in the page |
+| `element` | The wrapper |
 | `input` | The real `<textarea>` |
 | `value` | The text, as a getter |
 | `setValue(text, preserveHistory?)` | Writes the field through the editing pipeline. `true` makes it one undoable edit; the default assigns, which clears the history |
@@ -83,12 +83,4 @@ where the field wraps.
 ## In React
 
 `LiteAreaEditor` takes the options above plus `defaultValue`, `value`, `preserveHistory`,
-`editorRef`, and `className`, and renders one empty `div` that the editor is mounted inside. The
-text never passes through React — assigning a textarea's `value` is what clears the undo history —
-so `defaultValue` is the prop for the starting text and `value` is for a host that wants to write
-one.
-
-Three props are re-read on every render: `grammar`, `value`, and `readOnly`. The grammar is the one
-that is safe to rebuild on every render, because `refresh()` re-resolves it without rebuilding the
-element. Everything else — `sizing`, `completion`, `hover`, `sticky`, `indent`, `keys`,
-`decorations`, `injectStyles`, `styleNonce` — is read when the editor mounts.
+`editorRef`, and `className`. See [React](/api/react/).

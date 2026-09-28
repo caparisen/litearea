@@ -1,8 +1,7 @@
 # Architecture
 
 Why litearea is shaped the way it is. The README says what it does; this says what
-each decision costs and what it was chosen over, because most of them are only
-obvious once you have watched the alternative fail.
+each decision costs and what it was chosen over.
 
 The tree the editor builds:
 
@@ -15,9 +14,8 @@ div.litearea            ← the positioning container, and editor.element
   div.litearea-tooltip  ← the hover tooltip
 ```
 
-The layer is inside the box while the two floating elements are outside it,
-because the box clips nothing and a list that had to fit inside a rounded border
-would be cut off at the bottom.
+The layer is inside the box while the two floating elements are outside it, so the box's
+rounded border cannot cut off the bottom of a list.
 
 ## The one-parse rule
 
@@ -36,23 +34,42 @@ nothing re-derives it:
 The editor caches it on the text: `sync()` re-inspects only when
 `input.value` differs from the text the last inspection was computed from, so
 moving the caret, scrolling, or hovering costs nothing beyond the paint. The paint
-itself carries a key — the revision, whether decorations are painted, and the
-decoration and diagnostic counts — and `Overlay.render` returns immediately when
-both the text and the key match the last call. That is what keeps a caret move
-from rebuilding every span on the page.
+carries a key of its own (the revision, whether decorations are painted, and the
+decoration and diagnostic counts), and `Overlay.render` returns immediately when
+both the text and the key match the last call, so a caret move does not rebuild
+every span on the page.
 
-The failure this prevents is not abstract. The editors this library replaces
-re-derived the tokens, the parse, and the suggestions separately, from the same
-string, in three places, and the three drifted: a word could be painted as a valid
-value while the completer thought it was unknown, and a diagnostic pointed at a
-range that had already moved. Those were not three bugs to fix one at a time; they
-were one missing value. The completion list and the coloured text cannot disagree
-here, because there is only one answer to disagree with.
+The completion list and the coloured text cannot disagree, because there is only one
+answer.
 
 The same idea reaches into the DOM layer: `buildSegments` takes the three range
 lists and produces one stream, `complete` takes an inspection and produces rows,
 and `resolveHover` takes an inspection and produces a tooltip. None of them read
 the document again.
+
+### One pass per language
+
+A composite document does not get a second scan of the outer text. `scan` finds every
+`grammar` region in its single left-to-right pass, records it in `ScanResult.embeds`
+(the region's content is opaque to the outer rules, so it is one span found in one
+search), and `inspect` then runs the nested grammar over
+`text.slice(contentFrom, contentTo)` and splices the result into place:
+
+- every token is shifted by `contentFrom` and re-addressed to its line and column in the
+  outer document. The outer span for the region's content is removed first, so the
+  embedded paint replaces it rather than doubling it, and a token that only partly
+  overlaps the span is clipped rather than dropped;
+- every diagnostic and decoration is shifted by the same amount, and the language spans
+  themselves are shifted and one level deeper.
+
+The recursion is depth-uniform: each call's offsets are relative to the text it was
+given, so a child answers in its own coordinates and its caller shifts once. A region
+three languages deep is shifted once per level on the way out. `LanguageSpan.depth` is
+the one number adjusted on the way in, by adding the enclosing depth to each child
+span.
+
+The outer grammar's `checks` and `validate` run before the splice, over the outer tokens
+alone: a check is a statement about this language's words.
 
 ## Why the textarea is uncontrolled
 
@@ -66,33 +83,29 @@ field.setSelectionRange(from, to)
 document.execCommand('insertText', false, text)   // ← undoable
 ```
 
-Three details in that path are all load-bearing:
+Three details in that path matter:
 
 - **The field is focused first**, because the pipeline only runs on the focused
   element, and a completion accepted by mouse click arrives after the click has
   blurred the field.
-- **The return value is not trusted.** It differs across browsers and does not
-  need to be trusted: the *value* decides. A change the editor did not make
-  itself is a change the browser's history already knows about, which is the whole
-  point, so `field.value !== before` is what tells the two paths apart.
+- **The return value is not trusted.** It differs across browsers; the *value*
+  decides. `field.value !== before` tells the two paths apart: a change the editor did
+  not make itself is a change the browser's history already knows about.
 - **Only the changed range is written.** A completion writes `insert` over
   `[from, to)` and then moves the selection with `setSelectionRange`, which
   touches no text and cannot disturb the history.
 
-`execCommand` is deprecated and there is no replacement, and that is not an
-oversight anyone can route around. A synthetic `beforeinput` or `InputEvent` is
-untrusted, so the browser refuses to run it through the editing pipeline, and
-`setRangeText` is the standard API that changes the text while bypassing the
-history entirely. Every editor that supports undo on a textarea uses this call.
+`execCommand` is deprecated and has no replacement. A synthetic `beforeinput` or
+`InputEvent` is untrusted, so the browser refuses to run it through the editing
+pipeline, and `setRangeText` changes the text while bypassing the history entirely.
 
-Where it is missing, the edit still happens: `replaceThroughPipeline` falls back
-to `setRangeText`, dispatches the `input` event the browser would have dispatched,
-and returns `'direct'` instead of `'pipeline'`. The caller is told plainly that the
-history did not get the edit, so a host can decide whether that matters.
-`canEditThroughPipeline()` reports which environment you are in, `EditOutcome` is
-`'pipeline' | 'direct' | 'unchanged'`, and `setValue(next, preserveHistory)` is the
-one place that assigns `value` outright — for loading a different document, where
-clearing the history is the right answer rather than a casualty.
+Where it is missing, the edit still happens: `replaceThroughPipeline` falls back to
+`setRangeText`, dispatches the `input` event the browser would have dispatched, and
+returns `'direct'` instead of `'pipeline'`, so the caller knows the history did not get
+the edit. `canEditThroughPipeline()` reports which environment you are in,
+`EditOutcome` is `'pipeline' | 'direct' | 'unchanged'`, and `setValue(next,
+preserveHistory)` is the one place that assigns `value` outright, for loading a
+different document.
 
 `undoField` and `redoField` are thin wrappers over `execCommand('undo'/'redo')`.
 They report only whether the call was possible, never whether anything was
@@ -102,90 +115,79 @@ actually undone, because no browser exposes that.
 
 The painted layer draws the same characters as the field, behind it and inert
 (`aria-hidden`, `pointer-events: none`, `user-select: none`), and the field's own
-text is transparent with a visible caret. Two elements showing one document is
-only stable if they cannot disagree about where a glyph goes, so:
+text is transparent with a visible caret. The two elements must not disagree about
+where a glyph goes:
 
 **One typography, shared.** `.litearea-layer` and `.litearea-input` share a single
 rule, and the mirror copies the same computed properties. Adding a text property
 to one of them and not the other is the only way to break the stylesheet.
 
 **The layer may change three things.** Colour, background, and `text-decoration`.
-Anything that changes an advance — another font, a weight, letter spacing, a font
-feature — slides the paint off the character it belongs to, and it does so by a
-different amount on every character, which reads as a rendering glitch rather than
-as a styling mistake. That is why the box declares one monospace face and refuses
-ligatures: a ligature draws one glyph in the layer where the field draws two, so
-every character after it would be painted in the wrong place.
+Anything that changes an advance (another font, a weight, letter spacing, a font
+feature) slides the paint off the character it belongs to. The box therefore declares
+one monospace face and refuses ligatures: a ligature draws one glyph in the layer where
+the field draws two, so every character after it would be painted in the wrong place.
 
-**The scrollbar is compensated, not ignored.** When the box is clamped to its
-maximum height the field grows a scrollbar, and a scrollbar narrows the text. If
-the layer kept the full width it would wrap differently from the field and every
-colour would slide off its character. So the field's measured scrollbar width is
-published as `--litearea-scrollbar` and added to the layer's own right padding —
-and it is read *after* the overflow is applied, because that is when a scrollbar
-exists and therefore when there is a width to report.
+**The scrollbar is compensated, not ignored.** When the box is clamped to its maximum
+height the field grows a scrollbar, which narrows the text; a layer at the full width
+would wrap differently and every colour would slide off its character. The field's
+measured scrollbar width is published as `--litearea-scrollbar` and added to the
+layer's right padding. It is read *after* the overflow is applied, because that is when
+a scrollbar exists and there is a width to report.
 
-**Wrapping is not maintained by positioning.** `buildSegments` collects every
-range boundary — every token edge, decoration edge, and diagnostic edge — as a
-cut point, then emits one segment per interval, merging neighbours whose
-presentation is identical. The renderer appends those spans back to back with no
-positioning at all: the characters lay out where the characters lay out, and the
-colours follow. Alignment stops being something the code maintains and becomes
-something the layout cannot get wrong. The traditional alternative is three
-overlay layers, one per range list, and it does not work — each would need its own
-idea of where a range starts, and a span positioned by measuring drifts the moment
-the font, the wrapping, or the padding differs even slightly from what was
-measured.
+**Wrapping is not maintained by positioning.** `buildSegments` collects every range
+boundary (every token edge, decoration edge, and diagnostic edge) as a cut point, then
+emits one segment per interval, merging neighbours whose presentation is identical. The
+renderer appends those spans back to back with no positioning: the characters lay out
+where the characters lay out, and the colours follow. The alternative, three overlay
+layers one per range list, does not work: each would need its own idea of where a range
+starts, and a span positioned by measuring drifts as soon as the font, the wrapping, or
+the padding differs from what was measured.
 
-One segment shows one squiggle: the loudest diagnostic covering it wins, because
-two underlines on the same characters only make a messier line. The layer is also
-scrolled by copying the field's `scrollTop`/`scrollLeft` rather than by a
-transform, which is more reliable than a transform that can leave text on a half
+One segment shows one squiggle: the loudest diagnostic covering it wins, so two
+underlines do not stack. The layer is scrolled by copying the field's
+`scrollTop`/`scrollLeft` rather than by a transform, which can leave text on a half
 pixel.
 
-**A document ending in a newline has one more line than the paint.** A textarea
-lays out the empty line after that newline — it is a line the reader can put the
-caret on — and a `pre-wrap` div does not, because the newline breaks the line and
-nothing follows it. `min-height: 100%` covers only the case where the content fits
-inside the box; when the content overflows, which is exactly when there is a
-scrollbar, the field scrolls one line further than the text and the caret appears to
-walk away from the word under it. So the paint earns that line with a trailing
-`<br>`: an element, not a character, which is what keeps `paint.textContent ===
-field.value` true while the last line box exists. The scrollbar case has a second
-half of the same kind — a field with a scrollbar of its own wraps in a narrower
-space, and it is measured and published in the resizable mode too, because a width
-this editor did not cause is still a width the paint has to wrap inside.
+**A document ending in a newline has one more line than the paint.** A textarea lays
+out the empty line after that newline, which the reader can put the caret on, and a
+`pre-wrap` div does not, because the newline breaks the line and nothing follows it.
+`min-height: 100%` covers only the case where the content fits inside the box; when it
+overflows the field scrolls one line further than the text and the caret appears to walk
+away from the word under it. The paint therefore earns that line with a trailing `<br>`,
+an element rather than a character, which keeps `paint.textContent === field.value` true
+while the last line box exists. The scrollbar case has a second half of the same kind: a
+field with a scrollbar of its own wraps in a narrower space, and that width is measured
+and published in the resizable mode too, because it is still a width the paint has to
+wrap inside.
 
 Both are asserted in `scripts/browser-check.mjs` by scrolling three editors to the
-bottom — one document ending in a newline, one not, and one whose field owns its own
-scrollbar — and comparing the offsets, the scrollable heights, and the wrapping
-widths. Neither is visible to a unit test: `happy-dom` lays nothing out, which is
-how the library shipped both for as long as it did.
+bottom (one document ending in a newline, one not, and one whose field owns its own
+scrollbar) and comparing the offsets, the scrollable heights, and the wrapping widths.
+Neither is visible to a unit test, because `happy-dom` lays nothing out.
 
-**A rect is not a rect.** Two misalignments of the same kind are worth naming
-together, because both come from reading the wrong rectangle rather than from
-wrapping or fonts:
+**A rect is not a rect.** Two misalignments come from reading the wrong rectangle
+rather than from wrapping or fonts:
 
 - An inline box's `getBoundingClientRect` reports the font's CONTENT area, not the LINE
-  box it sits in — about 15px against 20px, with the leading split above and below. Both
+  box it sits in, about 15px against 20px, with the leading split above and below. Both
   places that report a caret's box therefore return the line box, correcting by half the
-  leading: `mirror.caretBox` (whose documented contract said line box and whose
-  implementation said content box, which is how the inline preview ended up two pixels low
-  on an empty line) and `PaintReader.lineBox`. A popup below the caret does not care; a
-  chip of text that has to line up with the text beside it cares very much, and comparing
-  the two kinds of rect in a test is how a pixel of error goes unnoticed.
+  leading: `mirror.caretBox`, whose documented contract said line box while the
+  implementation used the content box, which is how the inline preview ended up two
+  pixels low on an empty line, and `PaintReader.lineBox`. A popup below the caret does
+  not care, but a chip of text that has to line up with the text beside it does.
 - Absolutely positioned children are offset from their containing block's **padding
   box**, not its border box, and the box has a one pixel border. The sticky rows and the
   inline preview are both children of it, so both were a pixel low until
   `paddingBoxOf` made the correction a call rather than a comment.
 
 **Everything that has to sit ON the paint is measured FROM the paint.** Where a line
-landed is `dom/paint.ts`'s question — a `Range` over the line's characters, one walk of
-the painted text nodes, cached until the paint changes — and both the pinned rows and the
-inline preview ask it. The mirror is for the field: it predicts the caret, which is what a
-popup below the caret wants and what a chip that must continue the painted word does not,
-since the two differ by about a pixel. The one case the paint cannot answer is a line with
-nothing painted on it, and there the mirror still stands.
+landed is `dom/paint.ts`'s question, a `Range` over the line's characters, one walk of
+the painted text nodes, cached until the paint changes, and both the pinned rows and the
+inline preview ask it. The mirror is for the field: it predicts the caret, which is what
+a popup below the caret wants and what a chip that must continue the painted word does
+not. The one case the paint cannot answer is a line with nothing painted on it, and
+there the mirror still stands.
 
 ## The mirror
 
@@ -198,26 +200,22 @@ Two measurements are needed and the field cannot supply either:
 - **Where the caret is.** A textarea has no API for it at all.
 
 So a second element is kept offscreen with the field's exact typography and box,
-and the question is asked of it. One mirror, not two, because both jobs are
-measurements of text with the same copied styles and both are wrong in the same
-way if a single property is missed. It uses `visibility: hidden` rather than
-`display: none`, because a hidden element still lays out and a removed one does
+and the question is asked of it. One mirror serves both jobs, because both are
+measurements of text with the same copied styles. It uses `visibility: hidden` rather
+than `display: none`, because a hidden element still lays out and a removed one does
 not.
 
-**The property list is deliberately exhaustive**, not "the ones that seemed to
-matter": font family, size, weight, style, stretch, variant ligatures, kerning,
-feature settings, line height, letter spacing, word spacing, text transform,
-indent, align, direction, tab size, white space, overflow wrap, word break,
-hyphens, padding, border widths and styles, and box sizing. A missing
-`letter-spacing` moves the caret a fraction of a character per character, so the
-popup drifts further off the longer the line is — a bug that looks like a
-placement problem and is a copied-style problem.
+**The property list is exhaustive**, not "the ones that seemed to matter": font
+family, size, weight, style, stretch, variant ligatures, kerning, feature settings,
+line height, letter spacing, word spacing, text transform, indent, align, direction,
+tab size, white space, overflow wrap, word break, hyphens, padding, border widths and
+styles, and box sizing. A missing `letter-spacing` moves the caret a fraction of a
+character per character, so the popup drifts further off the longer the line is.
 
-The width is the interesting part. It has to be the field's **content** width or
-text wraps in one and not the other, and the field's `clientWidth` is its content
-plus padding but *not* its border, while the mirror is `border-box`. So the
-borders are added back, and the scrollbar is deliberately left out: a field
-clamped to its maximum height has one, and its text wraps inside the narrower area
+The width has to be the field's **content** width or text wraps in one and not the
+other. The field's `clientWidth` is its content plus padding but *not* its border, while
+the mirror is `border-box`, so the borders are added back. The scrollbar is left out: a
+field clamped to its maximum height has one, and its text wraps inside the narrower area
 above it.
 
 **The line height is measured, not assumed.** `line-height: normal` is a real and
@@ -225,36 +223,32 @@ common value and cannot be parsed as a number, so one line of text is laid out a
 its height taken; a font that reports nothing usable falls back to 1.2 × the font
 size.
 
-**The trailing-newline sentinel.** A `white-space: pre-wrap` element whose content
-ends in `\n` does not lay out a final empty line — the newline breaks the line and
-nothing follows it — so the measured height comes back one line short, and the box
-grows a scrollbar exactly when the user presses Enter at the end. A zero-width
-space after the newline gives that last line something to be.
+**The trailing-newline sentinel.** A `white-space: pre-wrap` element whose content ends
+in `\n` does not lay out a final empty line, because the newline breaks the line and
+nothing follows it, so the measured height comes back one line short and the box grows a
+scrollbar when the user presses Enter at the end. A zero-width space after the newline
+gives that last line something to be.
 
-**The caret marker technique.** To find the caret, the mirror is rebuilt with the
-text before the caret as a text node, the character *after* the caret inside a
-`white-space: pre` span, and the rest after it. Everything before the caret lays
-out normally, so the marker lands exactly where the next glyph will be, which is
-where the caret is. A span that could wrap would let the marker jump to the next
-line on its own, which is exactly the wrong answer at a line end. At the end of the
-document a zero-width space stands in for the next character. The field's own
-scroll offsets are then subtracted, because the caret's position on screen is what
-the popup is placed against, and a scrolled field moves its text without moving
-its border box. The mirror is rebuilt rather than patched: it is offscreen, so
-measuring it is cheap, while keeping incremental DOM in step with a fast typist is
-not.
+**The caret marker technique.** To find the caret, the mirror is rebuilt with the text
+before the caret as a text node, the character *after* the caret inside a `white-space:
+pre` span, and the rest after it. Everything before the caret lays out normally, so the
+marker lands where the next glyph will be. A span that could wrap would let the marker
+jump to the next line on its own, which is wrong at a line end. At the end of the
+document a zero-width space stands in for the next character. The field's own scroll
+offsets are then subtracted, because the caret's position on screen is what the popup is
+placed against, and a scrolled field moves its text without moving its border box. The
+mirror is rebuilt rather than patched: it is offscreen, so measuring it is cheap, while
+keeping incremental DOM in step with a fast typist is not.
 
-**The unmounted trap.** An element that is not in the document has no layout, so
-its width is zero, the mirror wraps at every character, and the measurement comes
-back several times too tall. That wrong height then has to be corrected on the
-next keystroke, which is what a box that jumps on first focus actually is. So an
-unmounted field is skipped rather than measured (`!isConnected || clientWidth ===
-0`), a `ResizeObserver` installed at construction performs the first real
-measurement as soon as there is a width to measure against, and `createEditor`
-re-measures synchronously after mounting so that the very first frame is already
+**The unmounted trap.** An element that is not in the document has no layout, so its
+width is zero, the mirror wraps at every character, and the measurement comes back
+several times too tall. An unmounted field is therefore skipped rather than measured
+(`!isConnected || clientWidth === 0`), a `ResizeObserver` installed at construction
+performs the first real measurement as soon as there is a width to measure against, and
+`createEditor` re-measures synchronously after mounting so the first frame is already
 right. A web font arriving later changes every metric the mirror copied, so
-`document.fonts.ready` triggers one refresh when it lands — without it the editor
-is a few pixels off until something else causes a re-layout.
+`document.fonts.ready` triggers one refresh when it lands; without it the editor is a few
+pixels off until something else causes a re-layout.
 
 ## Auto-sizing
 
@@ -269,8 +263,7 @@ The decision procedure, in the order it runs:
    whichever of the two is larger.
 4. `maxCandidate = min(maxHeight ?? ∞, maxRows ? lineHeight × maxRows + chrome : ∞)`,
    then `maxPx = max(maxCandidate, minPx)`. A maximum below the minimum is a host
-   mistake, and honouring it would make the box smaller than the host was told it
-   could be.
+   mistake.
 5. `content = mirror.contentHeight(field, text)` — the height the text wants with
    the full width available, and no scrollbar to narrow it.
 6. `wanted = clamp(max(content, minPx), minPx, maxPx)`; `overflow` becomes `'auto'`
@@ -280,14 +273,13 @@ The decision procedure, in the order it runs:
    `overflow-y` only when it changed, and then read the scrollbar width (now that
    one may exist) and publish it.
 
-The mirror has no scrollbar, which is what makes step 5 the number that decides
-whether a scrollbar is needed at all. That is also why **wrapping has to agree
-with the layer**: the decision to clamp is a claim that the text fits in the width
-the layer will be given, so the width the mirror measures at, the width the field
-wraps at, and the width the layer wraps at are the same width — including the
-scrollbar compensation above. `minRows` is additionally written to the textarea's
-native `rows` attribute, so the box has the right height on the very first frame,
-before any measurement, and in a document where the script never runs at all.
+The mirror has no scrollbar, so step 5 is the number that decides whether a scrollbar is
+needed. **Wrapping has to agree with the layer**: the
+decision to clamp claims that the text fits the width the layer will be given, so the
+width the mirror measures at, the width the field wraps at, and the width the layer
+wraps at are the same, including the scrollbar compensation above. `minRows` is also
+written to the textarea's native `rows` attribute, so the box has the right height on
+the first frame, before any measurement, and in a document where the script never runs.
 
 ## Pure engine, thin DOM
 
@@ -310,30 +302,26 @@ and a grammar go in, values come out:
 | `PaintReader`'s arithmetic: which line a caret is on, and which end of a range answers a caret | The rectangles themselves — an inline box against a line box, a padding box against a border box — which is where the two misalignments it was written for actually lived |
 
 Everything in the left column has a decision in it, and a decision is what a unit
-test asserts. Everything in the right column is a fact about a renderer. The four
-of them are exactly why `scripts/browser-check.mjs` exists: a textarea's undo
-stack has no API to read and no way to fake, so the only honest test is to make an
-edit and undo it in a browser that has a real one.
+test asserts; everything in the right column is a fact about a renderer. That is why
+`scripts/browser-check.mjs` exists: a textarea's undo stack has no API to read and no way
+to fake, so the only honest test is to make an edit and undo it in a browser that has a
+real one.
 
-The harness bundles the **shipped** `dist/index.js` — the package's one JavaScript
-entry point — rather than `src/`, so what it drives is the artifact a host
-installs, and it inlines it as an IIFE (Chromium refuses to fetch an ES module
-from a `file://` URL). The language the checks run against is defined inside the
-checklist itself, because the package ships none: proving that a particular
-product DSL works in a browser belongs beside the plugin that owns it, while the
-questions here are all about the engine. It drives the public API and the public
-DOM only: it mounts editors, types through `execCommand('insertText')`, presses
-keys, dispatches a `mousedown` on a row, and hovers a squiggle. The page
-reports through `document.title`, with `error` and `unhandledrejection` listeners
-that write to the same channel, because a page whose only output channel is its
-title has to report its own failures through that channel — otherwise a syntax
-error in the bundle shows up as an unchanged title and no evidence at all. The
-browser's stdout is written to files rather than read through a pipe, because a
-browser's stdout cannot be captured through piped stdio in a confined environment
-and comes back empty in a way that looks exactly like the page having produced no
-output.
+The harness bundles the **shipped** `dist/index.js`, the package's one JavaScript entry
+point, rather than `src/`, so what it drives is the artifact a host installs, and it
+inlines it as an IIFE, because Chromium refuses to fetch an ES module from a `file://`
+URL. The language the checks run against is defined inside the checklist itself, since
+the package ships none and a product DSL belongs beside the plugin that owns it. It
+drives the public API and the public DOM only: it mounts editors, types through
+`execCommand('insertText')`, presses keys, dispatches a `mousedown` on a row, and hovers
+a squiggle. The page reports through `document.title`, with `error` and
+`unhandledrejection` listeners writing to the same channel, so a syntax error in the
+bundle does not show up as an unchanged title with no evidence. The browser's stdout is
+written to files rather than read through a pipe, because it cannot be captured through
+piped stdio in a confined environment and comes back empty in a way that looks like the
+page produced no output.
 
-The part of that harness worth copying is the **negative control**. Before it
+The **negative control** is the part of that harness worth copying. Before it
 tests that a completion can be undone, it asserts that a direct `value` assignment
 is **not** undoable:
 
@@ -346,16 +334,14 @@ document.execCommand('undo')
 ```
 
 Without it, a passing undo test would only show that `execCommand('undo')` returned
-true. The check skips cleanly, with exit 0, when no Chromium-based browser is
-present, so a clean CI runner does not fail for it; `LITEAREA_REQUIRE=1` turns the
-skip into a failure for the environments that must not skip.
+true. The check skips cleanly, with exit 0, when no Chromium-based browser is present;
+`LITEAREA_REQUIRE=1` turns the skip into a failure.
 
-The DOM layer itself is deliberately thin: `LiteArea` is the only class that holds
-state, and every other module in `src/dom/` is one job — `editing` the
-undo-preserving write, `mirror` the measurement, `overlay` the paint, `popup` the
-list, `tooltip` the hover, `sticky` the pinned header rows, `support` the one place
-that asks the environment a question. `createEditor(target, options)` is the class plus "append it and measure
-again", which is all most hosts need.
+The DOM layer is thin: `LiteArea` is the only class that holds state, and every other
+module in `src/dom/` is one job: `editing` the undo-preserving write, `mirror` the
+measurement, `overlay` the paint, `popup` the list, `tooltip` the hover, `sticky` the
+pinned header rows, `support` the one place that asks the environment a question.
+`createEditor(target, options)` is the class plus "append it and measure again".
 
 ## What was rejected
 

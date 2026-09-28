@@ -12,8 +12,6 @@ service api {
 }
 ```
 
-Source: `site/pages/assets/live/grammars/mini-conf.ts`.
-
 ## The table the language is built from
 
 ::: code site/pages/assets/live/grammars/mini-conf.ts lines=20-50
@@ -46,10 +44,12 @@ would drift from the first.
 | `repeated-key` | info | `validate`: the key is set twice, and the last one wins |
 | `unclosed-region` | error | A block that was never closed |
 
-## Try
+::: try
 
 - Put the caret after `port ` and press `Ctrl+Space`: the rows are the ports.
 - Accept a row with the space: the space is the commit character, so it lands after the insert.
 - Rename `replicas` to `Replicas`: the check fires and the list still offers the lower-case spelling.
 - Open a block inside the block and type `}` twice.
 - Delete the final `}`: the region reports itself unclosed over its opening brace.
+
+:::

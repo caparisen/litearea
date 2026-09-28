@@ -1,14 +1,13 @@
 # Keys and commands
 
-The keymap is data. `DEFAULT_KEYS` is exported and says exactly what the editor answers to; a host's
-`keys` are tried before it, so a binding can be moved, added, or taken away without restating the
-rest.
+The keymap is data. `DEFAULT_KEYS` is exported and says what the editor answers to; a host's `keys`
+are tried before it, so a binding can be moved, added, or taken away without restating the rest.
 
 ## The commands
 
-`Command` is a closed set — the things the editor already knows how to do. A binding names one of
-them, and it is not a callback, because a host's callback could not be kept consistent with state
-the editor owns.
+`Command` is a closed set: the things the editor already knows how to do. A binding names one of
+them, and it is not a callback, because a host's callback could not be kept consistent with state the
+editor owns.
 
 | Command | What it does | Applies when |
 | --- | --- | --- |
@@ -23,10 +22,9 @@ the editor owns.
 | `hideTooltip` | Hide the tooltip | Always |
 | `ignore` | Nothing, and the key goes back to the browser | Always |
 
-There is no `when` expression, and that is what keeps the table small: a binding whose command does
-not apply right now is passed over, and the editor decides that rather than the host. One key can
-therefore carry two bindings — which is how `Tab` accepts a row while the list is open and would
-indent with it closed — with no condition syntax anywhere.
+There is no `when` expression: a binding whose command does not apply right now is passed over, and
+the editor decides that rather than the host. One key can therefore carry two bindings, which is how
+`Tab` accepts a row while the list is open and does nothing with it closed.
 
 ## The defaults
 
@@ -61,11 +59,10 @@ createEditor(target, {
 })
 ```
 
-A host's bindings are tried first and the defaults after them, so the list above is the whole of
-what changed. `ignore` is how a key is handed back: it matches, it suppresses anything below it, and
-it performs nothing, so the browser's own handling happens as if the editor had never seen the key.
-It is also the honest answer for a command with nothing to do — an outdent at the margin does not
-consume the keystroke either.
+A host's bindings are tried first and the defaults after them, so the list above is the whole of what
+changed. `ignore` hands a key back: it matches, it suppresses anything below it, and it performs
+nothing. It is also the honest answer for a command with nothing to do, since an outdent at the
+margin does not consume the keystroke either.
 
 `keyCombo(event)` writes a press the way a binding spells it, which is what a host needs to log a
 chord or to build a shortcut prompt.
@@ -74,14 +71,14 @@ chord or to build a shortcut prompt.
 
 Two things read a keystroke and are not in the table, both on purpose.
 
-**A key that moved the caret closes a list the caret has walked out of.** No key is named for this —
-not the arrows, not Home or End — because the key is beside the point: the editor asks whether the
+**A key that moved the caret closes a list the caret has walked out of.** No key is named for this,
+not the arrows and not Home or End, because the key is beside the point: the editor asks whether the
 caret is still inside the range the list was opened over, so `Ctrl+Arrow`, a word jump, and anything
 bound later are covered.
 
-**A completion row's `commitCharacters` take a keystroke while the list is open.** They are the
-row's own data — a source declares them and nothing has any by default — so there is no chord to
-bind. `completion: { commitCharacters: false }` switches the behaviour off for the whole editor.
+**A completion row's `commitCharacters` take a keystroke while the list is open.** They are the row's
+own data, a source declares them, and nothing has any by default, so there is no chord to bind.
+`completion: { commitCharacters: false }` switches the behaviour off for the whole editor.
 
 ## What the reader sees
 

@@ -9,7 +9,7 @@
 //
 // What it adds to Markdown is four directives, because a documentation page is not only
 // prose: `::: live` mounts a real editor, `::: try` is the list of things to do to it,
-// `::: note` is a note that prints in the margin, and `::: code` includes a file by path so a
+// `::: bench` is the playground's three panes, and `::: code` includes a file by path so a
 // sample cannot drift from the file it quotes.
 
 import { readFileSync } from 'node:fs'
@@ -168,7 +168,6 @@ export function renderMarkdown(source, env) {
   const out = []
   let at = 0
   let section = 0
-  let note = 0
   let sawTitle = false
 
   /** A unique id for a heading. */
@@ -229,77 +228,11 @@ export function renderMarkdown(source, env) {
         continue
       }
 
-      if (name === 'ledger') {
-        // A list of pages, set as a ruled ledger: a number, a title, and a line about it. One line
-        // per entry, `|`-separated, in the order `number | title | url | note`.
-        const rows = body
-          .filter((line) => line.trim() !== '')
-          .map((line) => {
-            const [number, title, url, ...note] = line.split('|').map((part) => part.trim())
-            return (
-              `<a class="ledger-row" href="${escapeHtml(env.link(url ?? '/'))}">` +
-              `<span class="ledger-num">${escapeHtml(number ?? '')}</span>` +
-              `<span class="ledger-title">${escapeHtml(title ?? '')}</span>` +
-              `<span class="ledger-note">${inline(note.join('|'), env)}</span>` +
-              `</a>`
-            )
-          })
-          .join('')
-        out.push(`<nav class="ledger" aria-label="Examples">${rows}</nav>`)
-        continue
-      }
-
-      if (name === 'claims') {
-        // A numbered block per claim. Each claim is an `###` line and the prose under it, which
-        // is what keeps the content a markdown document rather than a page of markup: the
-        // numbers are the renderer's, and a claim that is inserted in the middle renumbers the
-        // ones below it.
-        const claims = []
-        let current = null
-        for (const line of body) {
-          const head = /^### +(.*)$/.exec(line)
-          if (head !== null) {
-            if (current !== null) claims.push(current)
-            current = { title: head[1].trim(), lines: [] }
-            continue
-          }
-          current?.lines.push(line)
-        }
-        if (current !== null) claims.push(current)
-        out.push(
-          `<div class="claims">` +
-            claims
-              .map(
-                (claim, index) =>
-                  `<div class="claim">` +
-                  `<span class="claim-num">${pad(index + 1)}</span>` +
-                  `<div class="claim-text"><p class="claim-title">${inline(claim.title, env)}</p>` +
-                  renderMarkdown(claim.lines.join('\n'), env).html +
-                  `</div></div>`,
-              )
-              .join('') +
-            `</div>`,
-        )
-        continue
-      }
-
       if (name === 'try') {
         out.push(
           `<div class="try"><p class="try-label">Try</p>` +
             renderMarkdown(body.join('\n'), env).html +
             `</div>`,
-        )
-        continue
-      }
-
-      if (name === 'note') {
-        note += 1
-        const label = rest === '' ? String.fromCharCode(96 + note) : rest
-        out.push(
-          `<aside class="note" id="note-${escapeHtml(label)}">` +
-            `<span class="note-label" aria-hidden="true">${escapeHtml(label)}</span>` +
-            renderMarkdown(body.join('\n'), env).html +
-            `</aside>`,
         )
         continue
       }
@@ -418,11 +351,31 @@ export function renderMarkdown(source, env) {
       continue
     }
 
+    // ── a quote ─────────────────────────────────────────────────────────────
+    if (line.startsWith('>')) {
+      const body = []
+      while (at < lines.length && (lines[at].startsWith('>') || isBlank(lines[at]))) {
+        if (isBlank(lines[at]) && !(lines[at + 1] ?? '').startsWith('>')) break
+        body.push(lines[at].replace(/^> ?/, ''))
+        at += 1
+      }
+      out.push(
+        `<blockquote>` +
+          body
+            .join('\n')
+            .split(/\n\s*\n/)
+            .map((part) => `<p>${inline(part.replace(/\n/g, ' ').trim(), env)}</p>`)
+            .join('') +
+          `</blockquote>`,
+      )
+      continue
+    }
+
     // ── a paragraph ─────────────────────────────────────────────────────────
     const paragraph = []
     while (at < lines.length && !isBlank(lines[at]) && !/^```/.test(lines[at]) && !/^::: /.test(lines[at])) {
       if (/^#{1,4} /.test(lines[at]) || listKind(lines[at]) !== null) break
-      if (lines[at].trimStart().startsWith('|')) break
+      if (lines[at].trimStart().startsWith('|') || lines[at].startsWith('>')) break
       paragraph.push(lines[at].trim())
       at += 1
     }

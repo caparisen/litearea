@@ -1,41 +1,39 @@
 // ─── the page shell ─────────────────────────────────────────────────────────
 //
-// Every page is the same three things in the same order: a masthead, an article, and a colophon.
-// What changes is the article's shape — a document with a margin index, a document with a live
-// specimen pinned beside it, or the full-width playground — and that is a class on `<body>`
-// rather than a second layout.
+// Every page is the same three things in the same order: a masthead, an article, and a foot. What
+// changes is the article's shape — a document with a sidebar, a document with a live specimen
+// pinned beside it, or the full-width playground — and that is a class on `<body>` rather than a
+// second layout.
 //
-// The shell is generated in one function so the running head, the margin index, and the colophon
-// cannot drift between pages. Links are RELATIVE, computed from how deep the page sits, which is
-// what lets the same output be served from `/` in development and from `/litearea/` on Pages with
-// nothing rewritten.
+// The sidebar is one list: the group the page belongs to, then the sections of the page. Which
+// page of a group you are on and which section you are in are therefore the same column, read top
+// to bottom, and a reader who is four pages into the documentation can still see the other pages.
 //
-// A note on what is NOT here, because it used to be and it was wrong: there is no eyebrow line
-// over the title, no reading-time estimate, and no strip of licence facts in the footer. Small
-// print that describes the page rather than telling the reader something they came for is
-// decoration, and decoration that has to be read is worse than none.
+// Links are RELATIVE, computed from how deep the page sits, which is what lets the same output be
+// served from `/` in development and from `/litearea/` on Pages with nothing rewritten.
+//
+// A note on what is NOT here, because it used to be and it was wrong: there is no running head that
+// arrives on scroll, no progress hairline, no rule above the wordmark, and no numbered claim or
+// ledger block. Chrome that describes the page rather than telling the reader something they came
+// for is decoration, and decoration that has to be read is worse than none.
 
 import { escapeHtml as escape, frame } from './frames.mjs'
 import { PAGES } from './pages.mjs'
 
 const REPOSITORY = 'https://github.com/citisen/litearea'
 
-/** What each group of pages is called, for the two lists that make one reachable from another. */
+/** What each group of pages is called in the sidebar and at the foot of a page. */
 const GROUP_LABEL = new Map([
   ['/docs/', 'Documentation'],
+  ['/api/', 'API'],
   ['/examples/', 'Examples'],
   ['/playground/', 'Playground'],
 ])
 
-/**
- * The masthead's own index.
- *
- * Three entries and not eleven. The references are found from the documentation index, which is
- * the one page whose job is to list them; a masthead that lists every page is a masthead nobody
- * reads, and it cannot say which of nine references you are currently in.
- */
+/** The groups the masthead offers, in the order they are read. */
 export const SITE_INDEX = [
   { label: 'Docs', url: '/docs/' },
+  { label: 'API', url: '/api/' },
   { label: 'Examples', url: '/examples/' },
   { label: 'Playground', url: '/playground/' },
 ]
@@ -68,13 +66,7 @@ export function routerFor(out) {
 }
 
 /**
- * The pages that sit beside this one: the same masthead group, in the order the site is read.
- *
- * This exists because of a hole that shipped: the masthead has three entries, and the only list of
- * the eight references was the documentation index. So a reader who was already IN the
- * documentation — on the grammar reference, say — had no way to discover that a theming page
- * existed at all. Search found it and nothing else did.
- *
+ * The pages that sit beside this one: the same group, in the order the site is read.
  * @param page - the page record.
  * @returns its group, or an empty list when it belongs to none.
  */
@@ -84,30 +76,35 @@ function groupOf(page) {
 }
 
 /**
- * The margin index: the other pages in this group, then the sections of this page.
+ * The sidebar: the pages of this group, then the sections of this page.
+ *
+ * The section list is level-2 headings only. A documentation page here has a dozen third-level
+ * headings under its second-level ones, and a list of all of them is longer than the article it
+ * describes. The second-level ones are the page's own table of contents; the rest are found by
+ * reading, or by search.
+ *
+ * The index is mono, so a heading's markup is taken back off rather than rendered: `` `words` `` is
+ * a word here, not a code span, and a backtick set in a monospace face is a backtick.
+ *
  * @param page - the page record.
  * @param headings - the headings the renderer collected.
  * @returns the nav, or an empty string when there is nothing to list.
  */
-function rail(page, headings) {
-  const entries = headings.filter((heading) => heading.level === 2 || heading.level === 3)
+function sidebar(page, headings) {
+  const entries = headings.filter((heading) => heading.level === 2)
   const group = groupOf(page)
-  // The index is mono, so a heading's markup is taken back off rather than rendered: `` `words` ``
-  // is a word here, not a code span, and a backtick set in a monospace face is a backtick.
   const label = (text) => escape(text.replace(/`/g, ''))
+  const router = routerFor(page.out)
 
-  const chapters = group.length < 3
-    ? []
-    : group.map(
-        (entry) =>
-          `<li class="rail-item"><a href="${routerFor(page.out).href(entry.url)}"` +
-          `${entry.url === page.url ? ' aria-current="page"' : ''}>${escape(entry.title)}</a></li>`,
-      )
+  const chapters = group.map(
+    (entry) =>
+      `<li class="rail-item"><a href="${router.href(entry.url)}"` +
+      `${entry.url === page.url ? ' aria-current="page"' : ''}>${escape(entry.title)}</a></li>`,
+  )
 
   const sections = entries.map(
     (heading) =>
-      `<li class="rail-item rail-level-${heading.level}">` +
-      `<a href="#${heading.id}"><span class="rail-text">${label(heading.text)}</span></a></li>`,
+      `<li class="rail-item"><a href="#${heading.id}"><span class="rail-text">${label(heading.text)}</span></a></li>`,
   )
 
   if (chapters.length === 0 && sections.length < 2) return ''
@@ -117,7 +114,7 @@ function rail(page, headings) {
     `<nav class="rail" aria-label="On this page">` +
     (chapters.length === 0
       ? ''
-      : `<p class="rail-label">${escape(groupLabel)}</p><ul class="rail-list rail-chapters">${chapters.join('')}</ul>`) +
+      : `<p class="rail-label">${escape(groupLabel)}</p><ul class="rail-list">${chapters.join('')}</ul>`) +
     (sections.length < 2
       ? ''
       : `<p class="rail-label">On this page</p><ul class="rail-list">${sections.join('')}</ul>`) +
@@ -128,9 +125,9 @@ function rail(page, headings) {
 /**
  * The same list at the foot of the article.
  *
- * The margin index is hidden below 1080px, so this is the entry point that survives on a narrow
- * screen — and it is also what a reader sees after finishing a page, which is where "what else is
- * there" is actually asked. It is skipped on a group's own index, whose whole body is that list.
+ * The sidebar is hidden on a narrow screen, so this is the entry point that survives there — and
+ * it is also what a reader sees after finishing a page, which is where "what else is there" is
+ * actually asked. It is skipped on a group's own index, whose whole body is that list.
  *
  * @param page - the page record.
  * @returns the nav, or an empty string when the page has no siblings.
@@ -157,7 +154,7 @@ function footIndex(page) {
 /**
  * One page, in full.
  *
- * @param page - the page record: `{ url, out, title, kind, nav, specimen, rail }`.
+ * @param page - the page record: `{ url, out, title, kind, nav, specimen, mirror }`.
  * @param article - the rendered article HTML.
  * @param headings - the headings the renderer collected.
  * @returns the complete document.
@@ -170,34 +167,21 @@ export function renderPage(page, article, headings) {
       `${entry.label}</a></li>`,
   ).join('')
 
-  const sections = headings.filter((heading) => heading.level === 2).length
-  const group = groupOf(page)
-  const hasRail = page.rail !== false && (sections >= 2 || group.length >= 3)
+  const hasRail = page.nav !== undefined
   const hasSpecimen = page.specimen !== undefined
-  // The margin column is reserved only where something could use it and nothing else already
-  // does: a reference page with a margin index and no specimen pinned beside it.
-  const hasMargin = hasRail && !hasSpecimen && page.kind === 'doc'
 
   const specimen = hasSpecimen
     ? frame('specimen', page.specimen.id, page.specimen.label ?? page.specimen.id, page.specimen.controls)
     : ''
 
-  const bodyClass = [
-    `kind-${page.kind}`,
-    hasRail ? 'has-rail' : 'no-rail',
-    hasSpecimen ? 'has-specimen' : '',
-    hasMargin ? 'has-margin' : '',
-  ]
+  const bodyClass = [`kind-${page.kind}`, hasRail ? 'has-rail' : 'no-rail', hasSpecimen ? 'has-specimen' : '']
     .filter((part) => part !== '')
     .join(' ')
 
   const titleBlock =
     page.kind === 'home'
       ? ''
-      : `<header class="title-block">` +
-        `<h1 class="page-title">${escape(page.title)}</h1>` +
-        (page.standfirst === undefined ? '' : `<p class="standfirst">${page.standfirst}</p>`) +
-        `</header>`
+      : `<header class="title-block">` + `<h1 class="page-title">${escape(page.title)}</h1>` + `</header>`
 
   return `<!doctype html>
 <html lang="en" data-mode="paper">
@@ -230,31 +214,23 @@ ${page.mirror === undefined ? '' : `<link rel="alternate" type="text/markdown" h
 <body class="${bodyClass}" data-up="${router.up}">
 <a class="skip" href="#main">Skip to the article</a>
 <header class="masthead">
-  <div class="masthead-rule" aria-hidden="true"></div>
   <div class="masthead-row">
-    <a class="wordmark" href="${router.href('/')}">litearea<span class="wordmark-dot" aria-hidden="true"></span></a>
+    <a class="wordmark" href="${router.href('/')}">litearea</a>
+    <nav class="index" aria-label="The site">
+      <ul class="index-list">${index}</ul>
+    </nav>
     <button class="search-open" type="button" data-search-open>
       <span>Search</span><span class="search-key" data-search-key aria-hidden="true"></span>
     </button>
     <button class="mode-switch" type="button" data-mode-toggle aria-pressed="false">
-      <span class="mode-word" data-mode-word="paper">paper</span>
+      <span data-mode-word="paper">paper</span>
       <span class="mode-slash" aria-hidden="true">/</span>
-      <span class="mode-word" data-mode-word="ink">ink</span>
+      <span data-mode-word="ink">ink</span>
     </button>
   </div>
-  <nav class="index" aria-label="The site">
-    <ul class="index-list">${index}</ul>
-  </nav>
 </header>
-<div class="running" data-running hidden>
-  <div class="running-row">
-    <a class="running-mark" href="${router.href('/')}">litearea</a>
-    <p class="running-section" data-running-section>${escape(page.title)}</p>
-  </div>
-  <div class="running-progress" data-progress aria-hidden="true"></div>
-</div>
 <main class="page" id="main">
-${hasRail ? rail(page, headings) : ''}
+${hasRail ? sidebar(page, headings) : ''}
 ${titleBlock}
 <article class="prose">
 ${article}
@@ -262,23 +238,11 @@ ${footIndex(page)}
 </article>
 ${specimen}
 </main>
-<footer class="colophon">
-  <div class="colophon-grid">
-    <section class="colophon-part">
-      <h2 class="colophon-label">litearea</h2>
-      <p>MIT. Set in Bricolage Grotesque and Geist Mono, both under the SIL Open Font License and both served from this site.</p>
-    </section>
-    <section class="colophon-part">
-      <h2 class="colophon-label">Elsewhere</h2>
-      <ul class="colophon-links">
-        <li><a href="${REPOSITORY}" target="_blank" rel="noreferrer">github</a></li>
-        <li><a href="https://www.npmjs.com/package/@citisen/litearea" target="_blank" rel="noreferrer">npm</a></li>
-        <li><a href="${REPOSITORY}/blob/main/LICENSE" target="_blank" rel="noreferrer">licence</a></li>
-        <li><a href="${REPOSITORY}/releases" target="_blank" rel="noreferrer">releases</a></li>
-        <li><a href="${router.href('/llms.txt')}">llms.txt</a></li>
-        ${page.mirror === undefined ? '' : `<li><a href="${router.href(page.mirror)}">this page as markdown</a></li>`}
-      </ul>
-    </section>
+<footer class="foot">
+  <div class="foot-row">
+    <p class="foot-line">MIT · <a href="${REPOSITORY}" target="_blank" rel="noreferrer">github</a> · <a href="https://www.npmjs.com/package/@citisen/litearea" target="_blank" rel="noreferrer">npm</a> · <a href="${router.href('/llms.txt')}">llms.txt</a>${
+      page.mirror === undefined ? '' : ` · <a href="${router.href(page.mirror)}">this page as markdown</a>`
+    }</p>
   </div>
 </footer>
 </body>

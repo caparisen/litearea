@@ -11,8 +11,6 @@ form signup
   choice  plan      required  [free, pro]
 ```
 
-Source: `site/pages/assets/live/grammars/form-schema.ts`.
-
 ## The vocabularies
 
 ::: code site/pages/assets/live/grammars/form-schema.ts lines=38-63
@@ -49,12 +47,14 @@ is left for a later rule to claim.
 | `unclosed-region` | The `note` region's `end` was never found, as a warning |
 
 A `checks` entry sees only a token's own text, which is enough to require that a name look like a
-name. `validate` sees the whole document and whatever `analyze` returned. A rule about the SHAPE of
-a word can run while scanning; a rule about its PLACE cannot.
+name. `validate` sees the whole document and whatever `analyze` returned. A rule about the shape of a
+word can run while scanning; a rule about its place cannot.
 
-## Try
+::: try
 
 - Change `email` to `Email`: the check fires.
 - Add a second `text email required` row: the validator fires on the duplicate.
 - Put the caret inside `number` and type: the list stays eligible while the word is being spelled.
 - Delete the closing quote of the note: the region reports itself unclosed.
+
+:::

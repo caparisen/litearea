@@ -127,8 +127,8 @@ const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;
  *
  * The directives are the whole reason this exists: `::: live` mounts an editor and `::: code`
  * includes a file, and a text copy has to resolve them rather than leave them in. Code is inlined
- * from the file it names — the same file the page runs — and the four prose directives become the
- * markdown they were standing in for.
+ * from the file it names — the same file the page runs — and `::: try` becomes the list it was
+ * standing in for.
  *
  * @param source - the page's markdown, directives and all.
  * @param env - a link rewriter, which for a mirror is the absolute one.
@@ -171,19 +171,10 @@ function toMarkdown(source, env) {
       continue
     }
 
-    if (name === 'ledger') {
-      for (const line of body.filter((entry) => entry.trim() !== '')) {
-        const [number, title, url, ...note] = line.split('|').map((part) => part.trim())
-        out.push(`- ${number}. [${title}](${env.link(url ?? '/')}) — ${note.join('|')}`)
-      }
-      out.push('')
-      continue
-    }
-
-    // `try`, `note`, `claims`, and `raw` are markdown already, minus the wrapper; `live` and `bench`
-    // are editors and have no text form, so they are dropped rather than described.
-    if (name === 'try' || name === 'note' || name === 'claims' || name === 'raw') {
-      out.push(...body, '')
+    // `live` and `bench` are editors and have no text form, so they are dropped rather than
+    // described; `try` keeps its label as a bold heading over the list that stood inside it.
+    if (name === 'try') {
+      out.push('**Try**', '', ...body, '')
     }
   }
 

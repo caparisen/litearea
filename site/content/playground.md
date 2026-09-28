@@ -1,7 +1,7 @@
 # Playground
 
 The left pane is a document. The right pane is the language, as source, and it is a litearea editor
-too — painted by a litearea grammar written for litearea grammars. Under both, what the engine says
+too, painted by a litearea grammar written for litearea grammars. Under both, what the engine says
 about the document right now.
 
 Type in the document and the readout follows. Edit the grammar, press apply, and the document is
@@ -13,9 +13,8 @@ re-read against it. The document's undo history survives the change of language.
 ## How a grammar is applied
 
 The grammar pane's text is run with `new Function`, with `defineGrammar` and `defineVocabulary`
-passed in as parameters. That is why the three presets are expressions with no imports, and it is
-also the limit of what a grammar can reach: nothing on the page except the two definitions it is
-handed.
+passed in as parameters. That is why the presets are expressions with no imports, and it is also the
+limit of what a grammar can reach: nothing on the page except the two definitions it is handed.
 
 A source that does not evaluate is reported beside the pane it came from, and the last working
 language stays in force. A syntax error is the most likely thing to happen here, so it must not be
@@ -23,8 +22,8 @@ able to take the page with it.
 
 ## What the readout is
 
-The panel under the editors calls `inspect` on the same text with the same grammar, which is the
-call the editor itself makes on every keystroke.
+The panel under the editors calls `inspect` on the same text with the same grammar, which is the call
+the editor itself makes on every keystroke.
 
 | Section | Where it comes from |
 | --- | --- |
