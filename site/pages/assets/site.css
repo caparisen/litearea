@@ -376,6 +376,29 @@ html[data-mode='ink'] [data-mode-word='ink'] {
   padding-left: 8px;
 }
 
+/* The lines that belong beside an article rather than under it, in the margin index's own
+   register. They are a paragraph each and not a list of links, so they are set smaller and are
+   not marked with the accent. */
+.rail-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.rail-notes li {
+  margin-bottom: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--rule);
+}
+
+.rail-notes code {
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
 /* The sibling index at the foot of a page. It is the entry point that survives below 1024px, where
    the sidebar is hidden, so it is a plain ruled list rather than anything clever. */
 .more {
@@ -425,7 +448,7 @@ html[data-mode='ink'] [data-mode-word='ink'] {
 /* ─── 7 · the article ────────────────────────────────────────────────────── */
 
 .prose {
-  padding-bottom: 40px;
+  padding-bottom: 28px;
 }
 
 .prose > p,
@@ -434,19 +457,48 @@ html[data-mode='ink'] [data-mode-word='ink'] {
   max-width: var(--measure);
 }
 
+/* A page whose body IS an instrument rather than an article: the playground, whose three panes
+   are the page. It gets the reading measure taken off the prose, the tables, and the samples, so
+   the panes can be as wide as the column is. */
+body.is-wide {
+  --measure: none;
+}
+
+body.is-wide .prose > p,
+body.is-wide .prose > ul,
+body.is-wide .prose > ol,
+body.is-wide .prose table,
+body.is-wide .prose h2.heading {
+  max-width: 74ch;
+}
+
 .prose > p {
   margin: 0 0 1.05em;
 }
 
-/* The first paragraph is the lede, unless a rule line got there first — which is the case on
-   every page that opens with `::: meta`. */
-body:not(.kind-home) .prose > p:first-child,
-body:not(.kind-home) .prose > .rule-line + p {
+/* The first paragraph is the lede. */
+body:not(.kind-home) .prose > p:first-child {
   font-size: 1.08rem;
   line-height: 1.58;
   color: var(--ink-2);
-  max-width: 33rem;
-  margin-bottom: 1.5em;
+  max-width: 44rem;
+  margin-bottom: 1.4em;
+}
+
+/* On a page that is an instrument the lede is one sentence about what the instrument is, so it
+   does not get a paragraph's worth of space above it. */
+body.is-wide .title-block {
+  padding-top: 20px;
+}
+
+body.is-wide .page-title {
+  font-size: clamp(1.7rem, 2.2vw, 2.2rem);
+  margin-bottom: 12px;
+}
+
+body.is-wide .prose > p:first-child {
+  font-size: 1rem;
+  margin-bottom: 0.9em;
 }
 
 .prose strong {
@@ -858,19 +910,33 @@ h4.heading {
 
 /* ─── 14 · the playground bench ──────────────────────────────────────────── */
 
+/* The bench is the page rather than a figure on it: the document and the language side by side, and
+   the readout under them. The readout is the pane that scrolls, so the two editors never have to,
+   and it is set in columns of its own — four where there is room — which is what keeps a hundred
+   tokens from being a screenful the reader has to scroll past to get back to the grammar. */
 .bench {
-  margin: 28px 0 40px;
+  margin: 16px 0 18px;
   display: grid;
   gap: 1px;
   background: var(--rule-2);
   border: 1px solid var(--rule-2);
   border-top: 2px solid var(--ink);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .bench-pane {
   background: var(--paper-2);
   padding: 10px 12px 12px;
   min-width: 0;
+  min-height: 0;
+}
+
+.bench-pane[data-read] {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .bench-bar {
@@ -924,12 +990,19 @@ h4.heading {
   color: var(--paper);
 }
 
+/* The readout is the pane that scrolls: the editors above it never have to. Its own columns are
+   what keep a hundred tokens from being a screenful, and its ceiling is what keeps a long document
+   from pushing the editors and the grammar off the window. */
 .bench-read {
   font-family: var(--mono);
   font-size: var(--mono-size);
   line-height: 1.5;
-  max-height: 340px;
   overflow: auto;
+  flex: 1 1 auto;
+  min-height: 130px;
+  max-height: 240px;
+  columns: 4 200px;
+  column-gap: 22px;
 }
 
 .bench-read h4 {
@@ -939,6 +1012,7 @@ h4.heading {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--ink-3);
+  break-after: avoid;
 }
 
 .bench-read h4:first-child {
@@ -957,6 +1031,7 @@ h4.heading {
   gap: 8px;
   padding: 1px 0;
   border-bottom: 1px dotted var(--rule);
+  break-inside: avoid;
 }
 
 .bench-read .tag {
@@ -1046,7 +1121,7 @@ body.kind-home .prose > p:first-child {
 .foot-row {
   max-width: var(--page-w);
   margin: 0 auto;
-  padding: 12px var(--pad-x) 22px;
+  padding: 12px var(--pad-x) 18px;
 }
 
 .foot-line {
@@ -1215,20 +1290,12 @@ body .litearea-dec-base-coat {
     grid-row: 1;
   }
 }
-
-/* ─── the bench, side by side ────────────────────────────────────────────── */
-
-@media (min-width: 900px) {
+/* On a window with room to spare the bench takes it, so the whole grammar is on screen without the
+   reader having to scroll the pane to find a rule. --bench-lead is the prose above it, measured by
+   the client: a title that wraps to two lines on one screen and one on another is not a constant. */
+@media (min-width: 900px) and (min-height: 700px) {
   .bench {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .bench-pane:nth-child(3) {
-    grid-column: 1 / -1;
-  }
-
-  .bench-read {
-    max-height: 460px;
+    height: calc(100vh - var(--masthead-h) - var(--bench-lead, 220px) - 74px);
   }
 }
 

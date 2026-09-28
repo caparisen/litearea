@@ -47,9 +47,9 @@ the whole set, in the order the site is read.
 | --- | --- |
 | `ssg/markdown.mjs` | Markdown and the directives, in and HTML out |
 | `ssg/highlight.mjs` | A small tokenizer, for the static code samples |
-| `ssg/layout.mjs` | The shell: masthead, sidebar, article, foot |
+| `ssg/layout.mjs` | The shell: masthead, sidebar, article, foot — and `SIDE_NOTES`, the lines that print in the sidebar rather than under the article |
 | `ssg/frames.mjs` | The one frame a live editor is shown in |
-| `ssg/pages.mjs` | The page set: url, output path, title, group, sources, specimen |
+| `ssg/pages.mjs` | The page set: url, output path, title, group, sources, specimen, `wide` |
 | `content/*.md` | The prose, one file per page |
 | `pages/assets/` | The hand-written half: stylesheet, client modules, favicon |
 | `pages/assets/search.ts` | The search box, over the index the build writes |
@@ -86,6 +86,12 @@ that must not drift from the code.
 
 `live` and `bench` are dropped from the text copies rather than described, and
 `try` becomes a bold label over the list it stood in front of.
+
+A page whose body is an instrument rather than an article sets `wide: true`: the
+reading measure comes off its prose and its samples, and the playground's bench
+takes the height the window has left once the client has measured the prose above
+it. That is what lets the two editors, the readout, and the grammar all be on
+screen at once — see `watchLead` in `pages/assets/playground.ts`.
 
 ## Adding a live example
 

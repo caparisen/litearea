@@ -30,6 +30,26 @@ const GROUP_LABEL = new Map([
   ['/playground/', 'Playground'],
 ])
 
+/**
+ * The lines that belong beside an article rather than under it, keyed by page url.
+ *
+ * They are here and not in the markdown because of what they are for: the playground is an
+ * instrument, its article is four sentences, and a list of things to try under it is a second
+ * screenful the reader has to scroll past to get back to the editors. In the margin it is beside
+ * them, which is where a tip is worth reading.
+ */
+const SIDE_NOTES = new Map([
+  [
+    '/playground/',
+    [
+      'Accept a row with `Ctrl+Space`, then keep typing: the trailing space is written for you.',
+      'Rename a key in the **conf** preset, press `apply`, and watch the squiggle appear.',
+      'Break the grammar: the message names the line, and the document keeps the language it had.',
+      'Change a `scope` to a name of your own: it falls back to the text colour.',
+    ],
+  ],
+])
+
 /** The groups the masthead offers, in the order they are read. */
 export const SITE_INDEX = [
   { label: 'Docs', url: '/docs/' },
@@ -88,9 +108,10 @@ function groupOf(page) {
  *
  * @param page - the page record.
  * @param headings - the headings the renderer collected.
+ * @param tips - lines that belong beside the article rather than under it.
  * @returns the nav, or an empty string when there is nothing to list.
  */
-function sidebar(page, headings) {
+function sidebar(page, headings, tips) {
   const entries = headings.filter((heading) => heading.level === 2)
   const group = groupOf(page)
   const label = (text) => escape(text.replace(/`/g, ''))
@@ -107,7 +128,7 @@ function sidebar(page, headings) {
       `<li class="rail-item"><a href="#${heading.id}"><span class="rail-text">${label(heading.text)}</span></a></li>`,
   )
 
-  if (chapters.length === 0 && sections.length < 2) return ''
+  if (chapters.length === 0 && sections.length < 2 && tips.length === 0) return ''
 
   const groupLabel = GROUP_LABEL.get(page.nav ?? '') ?? 'Also here'
   return (
@@ -118,8 +139,29 @@ function sidebar(page, headings) {
     (sections.length < 2
       ? ''
       : `<p class="rail-label">On this page</p><ul class="rail-list">${sections.join('')}</ul>`) +
+    (tips.length === 0
+      ? ''
+      : `<p class="rail-label">Try</p><ul class="rail-notes">${tips.map((tip) => `<li>${inline(tip, router)}</li>`).join('')}</ul>`) +
     `</nav>`
   )
+}
+
+/**
+ * A line of small print with its inline markup, for the margin.
+ *
+ * It is rendered for the sidebar and nowhere else, so it is deliberately small: code spans, bold,
+ * and a link written as `[text](url)`. Anything else in it stays as the characters it was written
+ * with.
+ *
+ * @param text - the line, as markdown.
+ * @param router - the page's router.
+ * @returns HTML.
+ */
+function inline(text, router) {
+  return escape(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_whole, label, href) => `<a href="${escape(router.href(href))}">${label}</a>`)
 }
 
 /**
@@ -154,7 +196,7 @@ function footIndex(page) {
 /**
  * One page, in full.
  *
- * @param page - the page record: `{ url, out, title, kind, nav, specimen, mirror }`.
+ * @param page - the page record: `{ url, out, title, kind, nav, specimen, wide, mirror, tips }`.
  * @param article - the rendered article HTML.
  * @param headings - the headings the renderer collected.
  * @returns the complete document.
@@ -174,7 +216,12 @@ export function renderPage(page, article, headings) {
     ? frame('specimen', page.specimen.id, page.specimen.label ?? page.specimen.id, page.specimen.controls)
     : ''
 
-  const bodyClass = [`kind-${page.kind}`, hasRail ? 'has-rail' : 'no-rail', hasSpecimen ? 'has-specimen' : '']
+  const bodyClass = [
+    `kind-${page.kind}`,
+    hasRail ? 'has-rail' : 'no-rail',
+    hasSpecimen ? 'has-specimen' : '',
+    page.wide === true ? 'is-wide' : '',
+  ]
     .filter((part) => part !== '')
     .join(' ')
 
@@ -230,7 +277,7 @@ ${page.mirror === undefined ? '' : `<link rel="alternate" type="text/markdown" h
   </div>
 </header>
 <main class="page" id="main">
-${hasRail ? sidebar(page, headings) : ''}
+${hasRail ? sidebar(page, headings, SIDE_NOTES.get(page.url) ?? []) : ''}
 ${titleBlock}
 <article class="prose">
 ${article}

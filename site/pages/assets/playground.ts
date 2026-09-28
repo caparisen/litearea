@@ -88,9 +88,11 @@ function row(tag: string, value: string, className = ''): string {
 }
 
 /** One section of the readout: a heading, then the rows, or a sentence saying there are none. */
-function section(title: string, rows: readonly string[], empty: string): HTMLElement {
+function section(title: string, rows: readonly string[], empty: string, total?: number): HTMLElement {
   const box = element('div')
-  box.append(element('h4', undefined, title))
+  const heading = element('h4', undefined, title)
+  if (total !== undefined && total > rows.length) heading.textContent = `${title} (${String(rows.length)} of ${String(total)})`
+  box.append(heading)
   if (rows.length === 0) {
     box.append(element('p', 'empty', empty))
     return box
@@ -139,16 +141,19 @@ function render(bench: Bench, completion?: Completion): void {
   )
 
   const rows = (completion?.rows ?? [])
-    .slice(0, 12)
+    .slice(0, 8)
     .map((entry) =>
       row(entry.item.kind ?? 'row', entry.item.detail === undefined ? entry.item.label : `${entry.item.label} — ${entry.item.detail}`),
     )
 
   const state = inspection.state === undefined ? [] : [row('state', JSON.stringify(inspection.state) ?? 'undefined')]
 
+  // The readout is a column of rows beside the prose and it is meant to be read at a glance, so it
+  // shows the first of them and says how many it left out. Forty tokens is more than a screen of
+  // its own, and the count in the bar already carries the total.
   bench.counts.textContent = `${plural(tokens.length, 'token')} · ${plural(problems.length, 'problem')} · ${plural(marks.length, 'decoration')}`
   bench.read.replaceChildren(
-    section('tokens', tokens.slice(0, 40), 'the document is empty'),
+    section('tokens', tokens.slice(0, 30), 'the document is empty', tokens.length),
     section('problems', problems, 'none'),
     section('decorations', marks, 'none'),
     section('completion rows', rows, completion === undefined ? 'the list is closed' : 'nothing matches'),
@@ -173,6 +178,36 @@ function pane(title: string, controls: readonly HTMLElement[]): { pane: HTMLElem
   const body = element('div')
   box.append(bar, body)
   return { pane: box, body }
+}
+
+/**
+ * How much room the bench may take.
+ *
+ * The bench is the page, so it is sized to what is left of the window under the masthead — but a
+ * page is prose above it as well as an instrument, and that prose is not a constant: a title wraps
+ * on one screen and not on another, and a web font arriving late moves every line of it. So the
+ * space above the bench is MEASURED rather than assumed, and published as `--bench-lead` for the
+ * stylesheet to subtract.
+ *
+ * It is `offsetTop` that is read, which is the one number here that is already a layout result.
+ * Measuring the boxes above the bench instead would depend on when this runs, and the bench is
+ * built before the fonts are; the observer then fires whenever that column changes height, which
+ * is the only thing that can make the answer stale.
+ *
+ * @param host - the bench element.
+ */
+function watchLead(host: HTMLElement): void {
+  const measure = (): void => {
+    const lead = Math.min(Math.max(host.offsetTop, 120), 340)
+    host.style.setProperty('--bench-lead', `${String(Math.round(lead))}px`)
+  }
+  measure()
+  window.addEventListener('resize', measure, { passive: true })
+  void document.fonts?.ready.then(measure)
+  const prose = host.closest('.prose')
+  if (prose !== null && typeof ResizeObserver === 'function') {
+    new ResizeObserver(measure).observe(prose)
+  }
 }
 
 /** Build the bench and mount both editors. */
@@ -222,14 +257,20 @@ function build(host: HTMLElement): void {
 
   sourcePane.pane.append(bench.error)
   readPane.body.append(bench.read)
+  // The three panes are the host's children, and the readout is the one that may be laid out
+  // below them on a narrow screen: the grid asks for `data-read` by name.
+  readPane.pane.dataset.read = ''
   host.append(docPane.pane, sourcePane.pane, readPane.pane)
+  watchLead(host)
 
   // The grammar editor first: it is the language, and the document editor below is built with a
   // view of whatever it currently says.
   bench.source = createEditor(sourcePane.body, {
     grammar: dslGrammar,
     value: first.source,
-    sizing: { minRows: 12, maxRows: 30 },
+    // The grammar is the pane that scrolls: it is a whole module, and the readout under it is the
+    // instrument the reader came for.
+    sizing: { minHeight: 260, maxHeight: 340 },
     indent: { unit: 2 },
     ariaLabel: 'The grammar source',
   })
@@ -237,7 +278,9 @@ function build(host: HTMLElement): void {
   bench.doc = createEditor(docPane.body, {
     grammar: liveGrammar(bench.holder),
     value: first.document,
-    sizing: { minRows: 12, maxRows: 30 },
+    // The document is four lines in most presets, so its pane follows its content rather than
+    // claiming the height the grammar needs.
+    sizing: { minHeight: 260, maxHeight: 340 },
     hover: { enabled: true, delay: 140 },
     ariaLabel: 'The document',
     onChange: () => render(bench),

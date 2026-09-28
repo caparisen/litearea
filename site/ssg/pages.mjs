@@ -10,7 +10,7 @@
 // relative to the Vite root (`site/pages`) and `url` is where the page lands; they are separate
 // fields because a url ends in `/` and a file does not.
 
-/** @typedef {{ url: string, out: string, kind: string, title: string, nav?: string, description: string, sources: string[], specimen?: { id: string, label?: string, controls?: string[] }, headTitle?: string }} PageRecord */
+/** @typedef {{ url: string, out: string, kind: string, title: string, nav?: string, description: string, sources: string[], specimen?: { id: string, label?: string, controls?: string[] }, wide?: boolean, headTitle?: string }} PageRecord */
 
 /** @type {readonly PageRecord[]} */
 export const PAGES = [
@@ -200,6 +200,7 @@ export const PAGES = [
     description:
       'Write a grammar and a document in two live editors, and watch what the engine reports for every keystroke.',
     sources: ['content/playground.md'],
+    wide: true,
   },
   {
     url: '/404.html',
